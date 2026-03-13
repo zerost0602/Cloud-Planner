@@ -1,202 +1,100 @@
-/**
- * 웹 앱 진입점
- */
 function doGet() {
-  return HtmlService.createTemplateFromFile('index')
-    .evaluate()
-    .setTitle('일정관리 프로그램')
-    .addMetaTag('viewport', 'width=device-width, initial-scale=1')
-    .setXFrameOptionsMode(HtmlService.XFrameOptionsMode.ALLOWALL);
+  return HtmlService.createHtmlOutputFromFile('index')
+      .setTitle('DoubleBook - GAS 통합 가계부')
+      .addMetaTag('viewport', 'width=device-width, initial-scale=1')
+      .setXFrameOptionsMode(HtmlService.XFrameOptionsMode.ALLOWALL);
 }
 
-/**
- * 시트 초기화 및 헤더 체크
- */
-function getSheet() {
+function getSheet(name) {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
-  let sheet = ss.getSheetByName('Schedules');
-  const headers = ['id', 'title', 'date', 'time', 'location', 'description', 'type', 'importance', 'status', 'updatedAt'];
-  
+  let sheet = ss.getSheetByName(name);
   if (!sheet) {
-    sheet = ss.insertSheet('Schedules');
-    sheet.appendRow(headers);
-    sheet.setFrozenRows(1);
-  }
-  return sheet;
-}
-
-/**
- * 환경설정 시트 가져오기 (단일 행 유지 보장)
- */
-function getSettingsSheet() {
-  const ss = SpreadsheetApp.getActiveSpreadsheet();
-  let sheet = ss.getSheetByName('Settings');
-  if (!sheet) {
-    sheet = ss.insertSheet('Settings');
-    sheet.appendRow(['email', 'notificationHour', 'updatedAt']);
-    sheet.setFrozenRows(1);
-  }
-  return sheet;
-}
-
-/**
- * 설정값 불러오기
- */
-function getSettings() {
-  const sheet = getSettingsSheet();
-  const data = sheet.getDataRange().getValues();
-  if (data.length <= 1) return { email: Session.getActiveUser().getEmail(), notificationHour: "08" };
-  return {
-    email: data[1][0],
-    notificationHour: data[1][1]
-  };
-}
-
-/**
- * 설정값 저장 (중복 저장 방지 및 트리거 재설정)
- */
-function saveSettings(settings) {
-  const sheet = getSettingsSheet();
-  const headers = ['email', 'notificationHour', 'updatedAt'];
-  
-  sheet.clear(); 
-  sheet.appendRow(headers);
-  sheet.appendRow([settings.email, settings.notificationHour, new Date()]);
-  sheet.setFrozenRows(1);
-  
-  manageTriggers(parseInt(settings.notificationHour));
-  return "Success";
-}
-
-/**
- * 시간 기반 트리거 관리
- */
-function manageTriggers(hour) {
-  const triggers = ScriptApp.getProjectTriggers();
-  triggers.forEach(t => {
-    if (t.getHandlerFunction() === 'sendDailyNotification') {
-      ScriptApp.deleteTrigger(t);
+    sheet = ss.insertSheet(name);
+    if (name === 'Transactions') {
+      sheet.appendRow(['id', 'date', 'debits', 'credits', 'memo']);
+    } else if (name === 'Settings') {
+      sheet.appendRow(['key', 'value']);
     }
+  }
+  return sheet;
+}
+
+function getAllData() {
+  const settingsSheet = getSheet('Settings');
+  const transSheet = getSheet('Transactions');
+  const settingsRaw = settingsSheet.getDataRange().getValues();
+  const transRaw = transSheet.getDataRange().getValues();
+  
+  let initialSetup = { debits: [{ account: '현금', amount: 0 }], credits: [] };
+  let accounts = {
+    assets: [{ id: 'a1', name: '현금', subtype: 'fixed' }],
+    liabilities: [{ id: 'l1', name: '신용카드', subtype: 'variable' }, { id: 'e1', name: '이익잉여금', subtype: 'fixed' }],
+    revenue: [{ id: 'r1', name: '급여', subtype: 'fixed' }],
+    expenses: [{ id: 'x1', name: '식비', subtype: 'variable' }]
+  };
+  
+  settingsRaw.forEach(row => {
+    if (row[0] === 'initialSetup') initialSetup = JSON.parse(row[1]);
+    if (row[0] === 'accounts') accounts = JSON.parse(row[1]);
   });
   
-  // 매일 지정된 시간에 실행되는 트리거 생성
-  ScriptApp.newTrigger('sendDailyNotification')
-    .timeBased()
-    .everyDays(1)
-    .atHour(hour)
-    .nearMinute(0) // 정각 근처 실행 시도
-    .create();
-}
-
-/**
- * 매일 일정 메일 발송 로직 (Schedule과 Habit 모두 포함)
- */
-function sendDailyNotification() {
-  const ss = SpreadsheetApp.getActiveSpreadsheet();
-  const tz = ss.getSpreadsheetTimeZone(); // 스프레드시트 시간대 사용
-  const settings = getSettings();
-  
-  if (!settings.email) return;
-  
-  const todayStr = Utilities.formatDate(new Date(), tz, "yyyy-MM-dd");
-  const items = loadData();
-  
-  // 오늘 날짜이고 Schedule 또는 Habit인 항목 필터링
-  const todayItems = items.filter(it => it.date === todayStr && (it.type === 'Schedule' || it.type === 'Habit'));
-  
-  if (todayItems.length === 0) return; 
-  
-  const body = todayItems.map(s => {
-    const typeLabel = s.type === 'Habit' ? '[습관]' : '[일정]';
-    const timePart = s.time ? ` [${s.time}]` : "";
-    const locPart = s.location ? ` @${s.location}` : "";
-    const importance = s.importance && s.importance !== 'None' ? ` (${s.importance})` : "";
-    return `- ${typeLabel}${importance} ${s.title}${timePart}${locPart}`;
-  }).join('\n');
-  
-  const subject = `[PLANNER] ${todayStr} 오늘의 할 일 알림`;
-  const message = `안녕하세요,\n\n오늘(${todayStr}) 예정된 리스트입니다:\n\n${body}\n\n오늘도 좋은 하루 되세요!`;
-  
-  GmailApp.sendEmail(settings.email, subject, message);
-}
-
-/**
- * 모든 일정 데이터 읽기
- */
-function loadData() {
-  try {
-    const ss = SpreadsheetApp.getActiveSpreadsheet();
-    const tz = ss.getSpreadsheetTimeZone();
-    const sheet = getSheet();
-    const values = sheet.getDataRange().getValues();
-    if (values.length <= 1) return [];
-    
-    const headers = values.shift();
-    return values.map(row => {
-      let obj = {};
-      headers.forEach((header, i) => {
-        let val = row[i];
-        if (val instanceof Date) {
-          val = (header === 'date') 
-            ? Utilities.formatDate(val, tz, "yyyy-MM-dd")
-            : Utilities.formatDate(val, tz, "yyyy-MM-dd HH:mm:ss");
-        }
-        if (header === 'id') val = val.toString();
-        obj[header] = val || "";
-      });
-      return obj;
-    });
-  } catch (e) {
-    console.error("loadData error: " + e.message);
-    return [];
+  const transactions = [];
+  if (transRaw.length > 1) {
+    for (let i = 1; i < transRaw.length; i++) {
+      try {
+        transactions.push({
+          id: String(transRaw[i][0]),
+          date: transRaw[i][1] instanceof Date ? Utilities.formatDate(transRaw[i][1], Session.getScriptTimeZone(), 'yyyy-MM-dd') : transRaw[i][1],
+          debits: JSON.parse(transRaw[i][2]),
+          credits: JSON.parse(transRaw[i][3]),
+          memo: transRaw[i][4]
+        });
+      } catch (e) { console.error("Data parse error", e); }
+    }
   }
+  return { initialSetup, accounts, transactions };
 }
 
-/**
- * 데이터 저장 (최적화 버전)
- * - 날짜 계산을 루프 밖으로 빼서 1회만 실행
- * - 헤더와 데이터를 합쳐서 단 1번의 setValues로 처리
- * - 시트를 완전히 비우고 다시 써서 정합성 유지 및 속도 향상
- */
-function saveData(items) {
-  const ss = SpreadsheetApp.getActiveSpreadsheet();
-  const tz = ss.getSpreadsheetTimeZone();
-  const sheet = getSheet();
+function syncAllDataToSheet(data) {
+  const { initialSetup, accounts, transactions } = data;
   
-  // 1. 저장 시점의 시간은 딱 한 번만 계산 (성능 향상 핵심)
-  const nowStr = Utilities.formatDate(new Date(), tz, "yyyy-MM-dd HH:mm:ss");
+  // 1. Settings 시트 일괄 저장
+  const settingsSheet = getSheet('Settings');
+  settingsSheet.clear();
   
-  // 2. 헤더 정의
-  const headers = ['id', 'title', 'date', 'time', 'location', 'description', 'type', 'importance', 'status', 'updatedAt'];
+  // 2차원 배열로 데이터 준비
+  const settingsData = [
+    ['key', 'value'], // 헤더
+    ['initialSetup', JSON.stringify(initialSetup)],
+    ['accounts', JSON.stringify(accounts)]
+  ];
   
-  // 3. 헤더를 포함한 전체 데이터를 2차원 배열 하나로 준비
-  let dataToWrite = [headers];
-
-  if (items && items.length > 0) {
-    const bodyRows = items.map(item => [
-      item.id || "", 
-      item.title || "", 
-      item.date || "", 
-      item.time || "", 
-      item.location || "", 
-      item.description || "", 
-      item.type || "Schedule", 
-      item.importance || "None", 
-      item.status || "", 
-      nowStr // 미리 계산해둔 시간 값 사용
+  // setValues로 한 번에 입력
+  settingsSheet.getRange(1, 1, settingsData.length, settingsData[0].length).setValues(settingsData);
+  
+  // 2. Transactions 시트 일괄 저장 (여기가 핵심 성능 개선 구간)
+  const transSheet = getSheet('Transactions');
+  transSheet.clear();
+  
+  // 헤더 준비
+  const header = ['id', 'date', 'debits', 'credits', 'memo'];
+  
+  // 거래내역이 있을 경우 map을 통해 2차원 배열로 변환
+  let transData = [header]; // 헤더 포함
+  
+  if (transactions && transactions.length > 0) {
+    const bodyRows = transactions.map(t => [
+      t.id, 
+      t.date, 
+      JSON.stringify(t.debits), 
+      JSON.stringify(t.credits), 
+      t.memo
     ]);
-    // 헤더 배열 뒤에 데이터 배열 연결
-    dataToWrite = dataToWrite.concat(bodyRows);
+    transData = transData.concat(bodyRows);
   }
   
-  // 4. 시트 전체 초기화 (데이터 꼬임 방지 및 속도 최적화)
-  sheet.clear(); 
+  // 단 한 번의 API 호출로 모든 데이터 쓰기
+  transSheet.getRange(1, 1, transData.length, transData[0].length).setValues(transData);
   
-  // 5. 단 한 번의 통신으로 모든 데이터(헤더+본문) 쓰기
-  sheet.getRange(1, 1, dataToWrite.length, headers.length).setValues(dataToWrite);
-  
-  // 6. 편의성을 위해 첫 행(헤더) 고정
-  sheet.setFrozenRows(1);
-
-  return "Success";
+  return true;
 }
