@@ -1,535 +1,675 @@
 <!DOCTYPE html>
 <html lang="ko">
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>일정관리 시스템</title>
-  <!-- React 및 필수 라이브러리 로드 -->
-  <script src="https://unpkg.com/react@18/umd/react.development.js"></script>
-  <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
-  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
-  <script src="https://cdn.tailwindcss.com"></script>
-  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
-  <style>
-    @keyframes pulse-orange {
-      0% { background-color: #fb923c; box-shadow: 0 0 0 0 rgba(251, 146, 60, 0.7); }
-      70% { background-color: #f97316; box-shadow: 0 0 0 10px rgba(251, 146, 60, 0); }
-      100% { background-color: #fb923c; box-shadow: 0 0 0 0 rgba(251, 146, 60, 0); }
-    }
-    .btn-sync-dirty { animation: pulse-orange 2s infinite; color: white !important; }
-    .donut-chart { transform: rotate(-90deg); }
-    .no-scrollbar::-webkit-scrollbar { display: none; }
-    .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
-    .calendar-grid-cell { min-height: 60px; }
-    @media (min-width: 768px) { .calendar-grid-cell { min-height: 120px; } }
-    .schedule-item-monthly { background-color: #2563eb; color: white; transition: all 0.2s ease; }
-    .schedule-item-monthly:hover { background-color: #1d4ed8; transform: translateY(-1px); z-index: 10; }
-    .shake { animation: shake 0.5s cubic-bezier(.36,.07,.19,.97) both; }
-    @keyframes shake {
-      10%, 90% { transform: translate3d(-1px, 0, 0); }
-      20%, 80% { transform: translate3d(2px, 0, 0); }
-      30%, 50%, 70% { transform: translate3d(-4px, 0, 0); }
-      40%, 60% { transform: translate3d(4px, 0, 0); }
-    }
-    .toast-up { animation: toastUp 0.4s ease-out forwards; }
-    @keyframes toastUp { from { transform: translateY(100px); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
-  </style>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>DoubleBook - GAS N:M 멀티 전표</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+<script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+<script src="https://unpkg.com/lucide@latest"></script>
+<style>
+input[type="number"]::-webkit-inner-spin-button,
+input[type="number"]::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
+input[type="number"] { -moz-appearance: textfield; }
+.loading-overlay { background: rgba(255, 255, 255, 0.9); position: fixed; inset: 0; z-index: 9999; display: flex; align-items: center; justify-content: center; flex-direction: column; }
+.modal-scroll::-webkit-scrollbar { width: 4px; }
+.modal-scroll::-webkit-scrollbar-thumb { background-color: #cbd5e1; border-radius: 10px; }
+.sidebar-transition { transition: width 0.3s cubic-bezier(0.4, 0, 0.2, 1); }
+/* 모바일 터치 최적화 */
+button, input, select { touch-action: manipulation; }
+</style>
 </head>
-<body class="bg-slate-50 text-slate-900 overflow-hidden">
-  <div id="root"></div>
+<body class="bg-slate-50 text-slate-900 overflow-x-hidden font-sans">
+<div id="root"></div>
 
-  <script type="text/babel">
-    const { useState, useEffect, useMemo, useCallback } = React;
+<script type="text/babel">
+const { useState, useEffect, useMemo } = React;
 
-    // --- 유틸리티 함수 ---
-    const formatDate = (date) => {
-      const d = new Date(date);
-      if (isNaN(d.getTime())) return "";
-      let month = '' + (d.getMonth() + 1);
-      let day = '' + d.getDate();
-      let year = d.getFullYear();
-      if (month.length < 2) month = '0' + month;
-      if (day.length < 2) day = '0' + day;
-      return [year, month, day].join('-');
-    };
+const TrashIcon = () => (
+<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 6h18m-2 0v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6m3 0V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"></path><line x1="10" y1="11" x2="10" y2="17"></line><line x1="14" y1="11" x2="14" y2="17"></line></svg>
+);
 
-    const formatTimeOnly = (timeVal) => {
-      if (!timeVal) return "";
-      // 문자열인 경우 HH:mm만 추출 (스프레드시트에서 날짜가 섞여오는 경우 대응)
-      if (typeof timeVal === 'string') {
-        const match = timeVal.match(/(\d{2}:\d{2})/);
-        return match ? match[0] : timeVal;
+const Modal = ({ isOpen, onClose, title, children, maxWidth = "max-w-md", zIndex = "z-50" }) => {
+if (!isOpen) return null;
+return (
+<div className={`fixed inset-0 ${zIndex} flex items-end sm:items-center justify-center bg-black/60 backdrop-blur-sm p-0 sm:p-4 animate-in fade-in duration-200`}>
+<div className={`bg-white rounded-t-3xl sm:rounded-3xl w-full ${maxWidth} overflow-hidden shadow-2xl flex flex-col max-h-[92vh] sm:max-h-[95vh]`}>
+<div className="flex justify-between items-center p-4 sm:p-5 border-b bg-slate-50 shrink-0">
+<h3 className="text-sm sm:text-lg font-bold text-slate-800">{title}</h3>
+<button onClick={onClose} className="p-2 hover:bg-slate-200 rounded-full transition-colors text-slate-400">
+<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+</button>
+</div>
+<div className="p-4 sm:p-6 overflow-y-auto modal-scroll bg-white text-slate-800">{children}</div>
+</div>
+</div>
+);
+};
+
+const AccountGridPicker = ({ accounts, onPick }) => {
+const categories = [
+{ key: 'assets', label: '자산', color: 'bg-blue-50 text-blue-700 border-blue-200 hover:bg-blue-100' },
+{ key: 'liabilities', label: '부채', color: 'bg-red-50 text-red-700 border-red-200 hover:bg-red-100' },
+{ key: 'revenue', label: '수익', color: 'bg-emerald-50 text-emerald-700 border-emerald-200 hover:bg-emerald-100' },
+{ key: 'expenses', label: '비용', color: 'bg-orange-50 text-orange-700 border-orange-200 hover:bg-orange-100' }
+];
+return (
+<div className="space-y-6 animate-in slide-in-from-bottom-2 duration-300 pb-10">
+{categories.map(cat => (
+<div key={cat.key}>
+<h4 className="text-[10px] font-black uppercase tracking-widest text-slate-400 mb-3 ml-1">{cat.label}</h4>
+<div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+{(accounts[cat.key] || []).filter(a => a.name !== '이익잉여금').map(a => (
+<button key={a.id} onClick={() => onPick(a.name)} className={`p-3 rounded-xl border text-xs font-bold transition-all active:scale-95 hover:shadow-md ${cat.color}`}>{a.name}</button>
+))}
+{cat.key === 'liabilities' && (
+<button onClick={() => onPick('결산(임시)')} className="p-3 rounded-xl border text-xs font-bold bg-slate-50 text-slate-400 border-slate-200 hover:bg-slate-100 transition-colors">결산(임시)</button>
+)}
+</div>
+</div>
+))}
+</div>
+);
+};
+
+const App = () => {
+const [isLoading, setIsLoading] = useState(true);
+const [isDirty, setIsDirty] = useState(false);
+const [currentView, setCurrentView] = useState('BS');
+const [isSidebarOpen, setIsSidebarOpen] = useState(window.innerWidth > 1024);
+const [isSettingsModalOpen, setIsSettingsModalOpen] = useState(false);
+const [settingsTab, setSettingsTab] = useState('equity');
+const [isEntryModalOpen, setIsEntryModalOpen] = useState(false);
+const [editingTransaction, setEditingTransaction] = useState(null);
+
+const [statusMessage, setStatusMessage] = useState(null);
+const [confirmDialog, setConfirmDialog] = useState(null);
+const [activePicker, setActivePicker] = useState(null);
+
+const [standardDate, setStandardDate] = useState(new Date().toISOString().split('T')[0]);
+const [editRange, setEditRange] = useState({
+start: new Date(new Date().getFullYear(), new Date().getMonth(), 1).toISOString().split('T')[0],
+end: new Date().toISOString().split('T')[0]
+});
+
+const [initialSetup, setInitialSetup] = useState({ debits: [{ account: '현금', amount: 0 }], credits: [] });
+const [accounts, setAccounts] = useState({
+assets: [{ id: 'a1', name: '현금', subtype: 'fixed' }],
+liabilities: [{ id: 'l1', name: '신용카드', subtype: 'variable' }, { id: 'e1', name: '이익잉여금', subtype: 'fixed' }],
+revenue: [{ id: 'r1', name: '급여', subtype: 'fixed' }],
+expenses: [{ id: 'x1', name: '식비', subtype: 'variable' }]
+});
+const [transactions, setTransactions] = useState([]);
+
+const [entryRows, setEntryRows] = useState({
+date: new Date().toISOString().split('T')[0],
+debits: [{ account: '', amount: 0 }],
+credits: [{ account: '', amount: 0 }],
+memo: ''
+});
+
+const [addingToCategory, setAddingToCategory] = useState(null);
+const [draggedAccountId, setDraggedAccountId] = useState(null);
+
+useEffect(() => {
+const init = async () => {
+if (typeof google !== 'undefined') {
+google.script.run.withSuccessHandler((data) => {
+if (data.initialSetup) setInitialSetup(data.initialSetup);
+if (data.accounts) setAccounts(data.accounts);
+if (data.transactions) setTransactions(data.transactions);
+setIsLoading(false);
+setIsDirty(false);
+lucide.createIcons();
+}).getAllData();
+} else {
+setIsLoading(false);
+setTimeout(() => lucide.createIcons(), 100);
+}
+};
+init();
+}, []);
+
+useEffect(() => { if (statusMessage) { const t = setTimeout(() => setStatusMessage(null), 3000); return () => clearTimeout(t); } }, [statusMessage]);
+useEffect(() => { lucide.createIcons(); });
+
+const setupTotalDebits = useMemo(() => (initialSetup.debits || []).reduce((s, d) => s + Number(d.amount || 0), 0), [initialSetup.debits]);
+const setupTotalOtherCredits = useMemo(() => (initialSetup.credits || []).reduce((s, c) => s + Number(c.amount || 0), 0), [initialSetup.credits]);
+const calculatedInitialCapital = useMemo(() => setupTotalDebits - setupTotalOtherCredits, [setupTotalDebits, setupTotalOtherCredits]);
+
+const yearStartDate = useMemo(() => `${standardDate.split('-')[0]}-01-01`, [standardDate]);
+const allBsTransactions = useMemo(() => transactions.filter(t => t.date <= standardDate), [transactions, standardDate]);
+
+// 손익계산서용 (기존에는 결산전표를 제외했으나, '결산 시 0원 처리'를 위해 포함하도록 수정)
+const performanceTransactions = useMemo(() => transactions.filter(t => t.date >= yearStartDate && t.date <= standardDate), [transactions, yearStartDate, standardDate]);
+
+const accountBalances = useMemo(() => {
+const balances = {};
+Object.values(accounts).flat().forEach(a => balances[a.name] = 0);
+balances['결산(임시)'] = 0;
+(initialSetup.debits || []).forEach(d => { if (d.account) { balances[d.account] = (balances[d.account] || 0) + Number(d.amount || 0); } });
+(initialSetup.credits || []).forEach(c => { if (c.account) { balances[c.account] = (balances[c.account] || 0) - Number(c.amount || 0); } });
+allBsTransactions.forEach(t => {
+t.debits.forEach(d => { balances[d.account] = (balances[d.account] || 0) + Number(d.amount || 0); });
+t.credits.forEach(c => { balances[c.account] = (balances[c.account] || 0) - Number(c.amount || 0); });
+});
+return balances;
+}, [allBsTransactions, accounts, initialSetup]);
+
+const revenueHierarchy = useMemo(() => {
+const subtypes = ['fixed', 'variable'];
+const groups = subtypes.map(st => {
+const accs = accounts.revenue.filter(a => (a.subtype || 'fixed') === st).map(acc => {
+let amt = 0;
+performanceTransactions.forEach(t => { t.credits.forEach(c => { if(c.account === acc.name) amt += Number(c.amount); }); t.debits.forEach(d => { if(d.account === acc.name) amt -= Number(d.amount); }); });
+return { name: acc.name, amount: amt };
+}).filter(a => a.amount !== 0);
+return { label: st === 'fixed' ? '고정 항목' : '변동 항목', subtotal: accs.reduce((s, a) => s + a.amount, 0), accounts: accs };
+});
+return { total: groups.reduce((s, g) => s + g.subtotal, 0), groups };
+}, [performanceTransactions, accounts]);
+
+const expensesHierarchy = useMemo(() => {
+const subtypes = ['fixed', 'variable'];
+const groups = subtypes.map(st => {
+const accs = accounts.expenses.filter(a => (a.subtype || 'fixed') === st).map(acc => {
+let amt = 0;
+performanceTransactions.forEach(t => { t.debits.forEach(d => { if(d.account === acc.name) amt += Number(d.amount); }); t.credits.forEach(c => { if(c.account === acc.name) amt -= Number(c.amount); }); });
+return { name: acc.name, amount: amt };
+}).filter(a => a.amount !== 0);
+return { label: st === 'fixed' ? '고정 항목' : '변동 항목', subtotal: accs.reduce((s, a) => s + a.amount, 0), accounts: accs };
+});
+return { total: groups.reduce((s, g) => s + g.subtotal, 0), groups };
+}, [performanceTransactions, accounts]);
+
+const reportNetIncome = useMemo(() => revenueHierarchy.total - expensesHierarchy.total, [revenueHierarchy, expensesHierarchy]);
+
+const unsettledNetIncome = useMemo(() => {
+const revBal = accounts.revenue.reduce((sum, acc) => {
+    const bal = accountBalances[acc.name] || 0;
+    return sum + (bal < 0 ? Math.abs(bal) : -bal);
+}, 0);
+const expBal = accounts.expenses.reduce((sum, acc) => {
+    const bal = accountBalances[acc.name] || 0;
+    return sum + (bal > 0 ? bal : -Math.abs(bal));
+}, 0);
+return revBal - expBal;
+}, [accountBalances, accounts]);
+
+const totalAssets = accounts.assets.reduce((sum, acc) => sum + (accountBalances[acc.name] || 0), 0);
+const totalLiabilitiesOnly = accounts.liabilities.filter(a => a.name !== '이익잉여금').reduce((sum, acc) => sum + Math.abs(accountBalances[acc.name] || 0), 0);
+const retainedEarningsBalance = Math.abs(accountBalances['이익잉여금'] || 0);
+const currentEquity = calculatedInitialCapital + (accountBalances['이익잉여금'] < 0 ? Math.abs(accountBalances['이익잉여금']) : -accountBalances['이익잉여금']) + unsettledNetIncome;
+
+const totalDebitSum = useMemo(() => (entryRows.debits || []).reduce((s, r) => s + Number(r.amount || 0), 0), [entryRows.debits]);
+const totalCreditSum = useMemo(() => (entryRows.credits || []).reduce((s, r) => s + Number(r.amount || 0), 0), [entryRows.credits]);
+
+const handleSync = () => {
+setIsLoading(true);
+if (typeof google !== 'undefined') {
+google.script.run.withSuccessHandler(() => {
+setIsLoading(false); setIsDirty(false); setStatusMessage({ type: 'success', text: '클라우드 저장 완료' });
+}).syncAllDataToSheet({ initialSetup, accounts, transactions });
+}
+};
+
+const handleAddAccount = (category, name) => {
+if (!name.trim()) return;
+setAccounts(prev => ({ ...prev, [category]: [...prev[category], { id: Date.now().toString(), name: name.trim(), subtype: 'fixed' }] }));
+setIsDirty(true); setAddingToCategory(null);
+};
+
+const handleUpdateAccountName = (category, id, name) => {
+setAccounts(prev => ({ ...prev, [category]: prev[category].map(a => String(a.id) === String(id) ? { ...a, name: name.trim() } : a) }));
+setIsDirty(true);
+};
+
+const handleDeleteAccount = (category, id) => {
+setConfirmDialog({
+title: '삭제 확인',
+message: '해당 계정과목을 삭제하시겠습니까?',
+onConfirm: () => {
+setAccounts(prev => ({ ...prev, [category]: prev[category].filter(a => String(a.id) !== String(id)) }));
+setIsDirty(true); setConfirmDialog(null);
+}
+});
+};
+
+const handleDeleteTransaction = () => {
+if (!editingTransaction) return;
+setConfirmDialog({
+title: '전표 삭제',
+message: '이 거래를 삭제하시겠습니까?',
+onConfirm: () => {
+setTransactions(prev => prev.filter(t => t.id !== editingTransaction.id));
+setIsDirty(true); setIsEntryModalOpen(false); setEditingTransaction(null); setConfirmDialog(null);
+}
+});
+};
+
+const handleSaveEntry = () => {
+if (totalDebitSum !== totalCreditSum || totalDebitSum === 0) return;
+const newTransaction = {
+id: editingTransaction ? editingTransaction.id : `T-${Date.now()}`,
+date: entryRows.date,
+debits: entryRows.debits.filter(d => d.account && d.amount > 0),
+credits: entryRows.credits.filter(c => c.account && c.amount > 0),
+memo: entryRows.memo || '거래 내역'
+};
+setTransactions(prev => editingTransaction ? prev.map(t => t.id === editingTransaction.id ? newTransaction : t) : [...prev, newTransaction]);
+setIsDirty(true); setIsEntryModalOpen(false); setEditingTransaction(null);
+setEntryRows({ date: new Date().toISOString().split('T')[0], debits: [{ account: '', amount: 0 }], credits: [{ account: '', amount: 0 }], memo: '' });
+};
+
+const handleClosing = () => {
+  const closingDebits = [];
+  const closingCredits = [];
+  let totalRevToClear = 0;
+  let totalExpToClear = 0;
+
+  accounts.revenue.forEach(acc => {
+    const bal = accountBalances[acc.name] || 0;
+    if (bal !== 0) {
+      if (bal < 0) {
+        const amt = Math.abs(bal);
+        closingDebits.push({ account: acc.name, amount: amt });
+        totalRevToClear += amt;
+      } else {
+        const amt = bal;
+        closingCredits.push({ account: acc.name, amount: amt });
+        totalRevToClear -= amt;
       }
-      // Date 객체인 경우
-      const d = new Date(timeVal);
-      if (!isNaN(d.getTime())) {
-        return d.toTimeString().slice(0, 5);
+    }
+  });
+
+  accounts.expenses.forEach(acc => {
+    const bal = accountBalances[acc.name] || 0;
+    if (bal !== 0) {
+      if (bal > 0) {
+        const amt = bal;
+        closingCredits.push({ account: acc.name, amount: amt });
+        totalExpToClear += amt;
+      } else {
+        const amt = Math.abs(bal);
+        closingDebits.push({ account: acc.name, amount: amt });
+        totalExpToClear -= amt;
       }
-      return timeVal;
-    };
+    }
+  });
 
-    const getDaysInMonth = (year, month) => new Date(year, month + 1, 0).getDate();
-    const getFirstDayOfMonth = (year, month) => new Date(year, month, 1).getDay();
-    const getImpScore = (imp) => {
-      if (imp === '!!!') return 3;
-      if (imp === '!!') return 2;
-      if (imp === '!') return 1;
-      return 0;
-    };
+  if (totalRevToClear === 0 && totalExpToClear === 0) {
+    setStatusMessage({ type: 'error', text: '결산할 잔액이 없습니다.' });
+    return;
+  }
 
-    // --- 개별 뷰 컴포넌트 (App 외부 정의하여 불필요한 전체 리렌더링 방지) ---
+  const netIncome = totalRevToClear - totalExpToClear;
 
-    const MonthlyView = ({ items, currentDate, setCurrentDate, setView, openEditor, todayStr }) => {
-      const year = currentDate.getFullYear();
-      const month = currentDate.getMonth();
-      const days = [];
-      const startDay = getFirstDayOfMonth(year, month);
-      const totalDaysCount = getDaysInMonth(year, month);
-      for (let i = 0; i < startDay; i++) days.push(null);
-      for (let i = 1; i <= totalDaysCount; i++) days.push(i);
-      const daysOfWeek = ['SUN', 'MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT'];
+  setConfirmDialog({
+    title: '장부 결산 실행',
+    message: `${standardDate} 기준으로 수익과 비용의 모든 잔액을 정리하시겠습니까? (순이익 ${netIncome.toLocaleString()}원)`,
+    onConfirm: () => {
+      const ts = Date.now();
+      const entry1_debits = [...closingDebits];
+      const entry1_credits = [...closingCredits];
+      if (netIncome > 0) { entry1_credits.push({ account: '결산(임시)', amount: netIncome }); } 
+      else if (netIncome < 0) { entry1_debits.push({ account: '결산(임시)', amount: Math.abs(netIncome) }); }
 
-      return (
-        <div className="flex-1 p-2 md:p-4 overflow-auto">
-          <div className="flex items-center justify-between mb-4 md:mb-6 px-1">
-            <h2 className="text-lg md:text-2xl font-bold">{year}년 {month + 1}월</h2>
-            <div className="flex gap-1">
-              <button onClick={() => setCurrentDate(new Date(year, month - 1, 1))} className="p-2 bg-white border rounded hover:bg-gray-50"><i className="fas fa-chevron-left"></i></button>
-              <button onClick={() => setCurrentDate(new Date())} className="px-3 py-2 bg-white border rounded font-bold text-xs shadow-sm hover:bg-gray-50">Today</button>
-              <button onClick={() => setCurrentDate(new Date(year, month + 1, 1))} className="p-2 bg-white border rounded shadow-sm hover:bg-gray-50"><i className="fas fa-chevron-right"></i></button>
-            </div>
-          </div>
-          <div className="grid grid-cols-7 border-t border-l border-slate-200 shadow-sm rounded-lg overflow-hidden text-[10px] md:text-xs">
-            {daysOfWeek.map((day, i) => (
-              <div key={day} className={`p-2 text-center font-bold border-r border-b ${i === 0 ? 'bg-red-50 text-red-500' : i === 6 ? 'bg-blue-50 text-blue-500' : 'bg-slate-50 text-slate-400'}`}>{day}</div>
-            ))}
-            {days.map((day, idx) => {
-              const dateStr = day ? `${year}-${String(month + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}` : null;
-              const isToday = dateStr === todayStr;
-              const daySchedules = items.filter(it => it.date === dateStr && it.type === 'Schedule').sort((a,b) => getImpScore(b.importance) - getImpScore(a.importance));
-              return (
-                <div key={idx} className={`calendar-grid-cell p-1 border-r border-b transition-colors ${isToday ? 'bg-blue-50/50' : 'bg-white'}`} onDoubleClick={() => day && (setCurrentDate(new Date(year, month, day)), setView('weekly'))}>
-                  {day && <div className="flex flex-col h-full overflow-hidden">
-                    <span className={`text-[10px] md:text-xs font-black px-1.5 py-0.5 rounded w-fit ${isToday ? 'bg-blue-600 text-white shadow-sm' : idx % 7 === 0 ? 'text-red-500' : idx % 7 === 6 ? 'text-blue-500' : 'text-slate-700'}`}>{day}</span>
-                    <div className="flex flex-col gap-1 mt-1 overflow-y-auto no-scrollbar">
-                      {daySchedules.map(s => (
-                        <div key={s.id} onClick={(e) => { e.stopPropagation(); openEditor(s); }} className="schedule-item-monthly text-[8px] md:text-[10px] px-1.5 py-0.5 rounded truncate font-medium shadow-sm cursor-pointer">
-                          {s.importance !== 'None' && <span className="mr-1 text-yellow-300 font-bold">{s.importance}</span>}{s.title}
-                        </div>
-                      ))}
-                    </div>
-                  </div>}
-                </div>
-              );
-            })}
-          </div>
-        </div>
-      );
-    };
+      const entry1 = { id: `CLOSE-A-${ts}`, date: standardDate, debits: entry1_debits, credits: entry1_credits, memo: `[결산-1] ${standardDate} 수익비용 잔액 집계` };
 
-    const WeeklyView = ({ items, currentDate, setCurrentDate, toggleHabitStatus, openEditor, todayStr }) => {
-      const curr = new Date(currentDate);
-      const monday = new Date(curr.setDate(curr.getDate() - curr.getDay() + (curr.getDay() === 0 ? -6 : 1)));
-      const weekDays = Array.from({length: 7}, (_, i) => new Date(new Date(monday).setDate(monday.getDate() + i)));
-      const dayNames = ['SUN', 'MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT'];
+      const entry2_debits = [];
+      const entry2_credits = [];
+      if (netIncome > 0) {
+        entry2_debits.push({ account: '결산(임시)', amount: netIncome });
+        entry2_credits.push({ account: '이익잉여금', amount: netIncome });
+      } else if (netIncome < 0) {
+        const loss = Math.abs(netIncome);
+        entry2_debits.push({ account: '이익잉여금', amount: loss });
+        entry2_credits.push({ account: '결산(임시)', amount: loss });
+      }
 
-      return (
-        <div className="flex-1 p-3 md:p-6 overflow-auto" id="weekly-scroll-container">
-           <div className="flex flex-col md:flex-row md:items-center justify-between mb-6 gap-4">
-            <h2 className="text-xl md:text-2xl font-bold">{monday.getFullYear()}년 {monday.getMonth() + 1}월 주간 일정</h2>
-            <div className="flex gap-2">
-              <button onClick={() => setCurrentDate(new Date(currentDate.setDate(currentDate.getDate()-7)))} className="p-2 bg-white border rounded shadow-sm hover:bg-gray-50 flex-1 md:flex-none"><i className="fas fa-chevron-left"></i></button>
-              <button onClick={() => setCurrentDate(new Date())} className="px-4 py-2 bg-white border rounded font-bold text-sm shadow-sm hover:bg-gray-50 flex-1 md:flex-none">Today</button>
-              <button onClick={() => setCurrentDate(new Date(currentDate.setDate(currentDate.getDate()+7)))} className="p-2 bg-white border rounded shadow-sm hover:bg-gray-50 flex-1 md:flex-none"><i className="fas fa-chevron-right"></i></button>
-            </div>
-          </div>
-          <div className="space-y-4">
-            {weekDays.map((d) => {
-              const dateStr = formatDate(d);
-              const dayItems = items.filter(it => it.date === dateStr).sort((a, b) => getImpScore(b.importance) - getImpScore(a.importance));
-              const dayIdx = d.getDay();
-              const isDayToday = dateStr === todayStr;
-              return (
-                <div key={dateStr} className="flex flex-col md:flex-row gap-2 md:gap-4">
-                  <div className={`w-full md:w-32 p-3 rounded-xl border-2 flex md:flex-col items-center justify-between md:justify-center bg-white shadow-sm transition-all ${isDayToday ? 'border-blue-500 bg-blue-50' : dayIdx === 0 ? 'border-red-100 text-red-500' : dayIdx === 6 ? 'border-blue-100 text-blue-500' : 'border-slate-100'}`}>
-                    <div className={`text-[10px] font-black uppercase ${isDayToday ? 'text-blue-600' : 'text-slate-400'}`}>{dayNames[dayIdx]}</div>
-                    <div className={`text-2xl md:text-4xl font-black ${isDayToday ? 'text-blue-700' : 'text-slate-800'}`}>{d.getDate()}</div>
-                  </div>
-                  <div className="flex-1 bg-white p-3 rounded-xl border border-slate-200 shadow-sm flex flex-col gap-2">
-                    {dayItems.length === 0 ? <div className="text-slate-300 italic text-xs py-4 text-center">No plans recorded.</div> : 
-                      dayItems.map(it => (
-                        <div key={it.id} className="flex items-center gap-3 p-2.5 rounded-xl hover:bg-slate-50 cursor-pointer shadow-sm border border-transparent hover:border-slate-100" onClick={() => openEditor(it)}>
-                          <div className="flex items-center gap-2">
-                            {it.type === 'Habit' && (
-                              <div 
-                                className="w-7 h-7 flex items-center justify-center border-2 rounded-lg bg-white shadow-inner transition-all hover:scale-105 active:scale-95" 
-                                onClick={(e) => { e.preventDefault(); e.stopPropagation(); toggleHabitStatus(it.id); }}
-                              >
-                                {it.status === 'CHECK' && <i className="fas fa-check text-green-500"></i>}
-                                {it.status === 'X' && <i className="fas fa-times text-red-400"></i>}
-                              </div>
-                            )}
-                            {it.importance !== 'None' && <span className="text-red-600 font-black text-xl">{it.importance}</span>}
-                          </div>
-                          <div className="flex flex-col flex-1 min-w-0">
-                            <span className="font-bold text-slate-800 text-base truncate">{it.title}</span>
-                            <div className="flex flex-wrap gap-3 items-center mt-0.5">
-                              {it.time && <span className="text-[11px] text-slate-400 font-medium"><i className="far fa-clock mr-1"></i>{formatTimeOnly(it.time)}</span>}
-                              {it.location && <span className="text-[11px] text-blue-400 font-bold truncate max-w-[150px]"><i className="fas fa-map-marker-alt mr-1"></i>{it.location}</span>}
-                            </div>
-                          </div>
-                          <i className="fas fa-chevron-right text-slate-200 text-xs"></i>
-                        </div>
-                      ))
-                    }
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        </div>
-      );
-    };
+      const newEntries = [entry1];
+      if (netIncome !== 0) {
+        newEntries.push({ id: `CLOSE-B-${ts}`, date: standardDate, debits: entry2_debits, credits: entry2_credits, memo: `[결산-2] ${standardDate} 순이익 이익잉여금 대체` });
+      }
+      setTransactions(prev => [...prev, ...newEntries]);
+      setIsDirty(true); setConfirmDialog(null); setStatusMessage({ type: 'success', text: '결산이 완료되었습니다.' });
+    }
+  });
+};
 
-    const AchievementView = ({ items, currentDate }) => {
-      const [targetMonth, setTargetMonth] = useState(`${currentDate.getFullYear()}-${String(currentDate.getMonth()+1).padStart(2, '0')}`);
-      const filteredHabits = items.filter(it => it.type === 'Habit' && it.date && it.date.startsWith(targetMonth));
-      const total = filteredHabits.length;
-      const uncompleted = filteredHabits.filter(it => it.status === 'X').length;
-      const completed = filteredHabits.filter(it => it.status === 'CHECK').length;
-      const percentage = total === 0 ? 0 : Math.round((completed / total) * 100);
-      const circumference = 2 * Math.PI * 95;
-      const offset = circumference - (percentage / 100) * circumference;
+const handleUpdateEntryRow = (type, index, field, value) => {
+setEntryRows(prev => {
+const newRows = [...prev[type]];
+newRows[index] = { ...newRows[index], [field]: value };
+return { ...prev, [type]: newRows };
+});
+};
 
-      return (
-        <div className="flex-1 p-4 md:p-8 overflow-y-auto no-scrollbar">
-          <div className="flex flex-col items-center max-w-4xl mx-auto bg-white p-6 md:p-12 rounded-3xl shadow-lg border">
-            <div className="mb-8 w-full flex flex-col md:flex-row justify-between items-center gap-4">
-              <h2 className="text-lg md:text-2xl font-black text-slate-800 tracking-tight uppercase">Habit Achievement</h2>
-              <input type="month" value={targetMonth} onChange={(e) => setTargetMonth(e.target.value)} className="w-full md:w-auto p-2 border rounded-xl font-bold bg-slate-50 focus:ring-2 focus:ring-blue-500 outline-none" />
-            </div>
-            <div className="flex flex-col md:flex-row items-center gap-12 w-full justify-center">
-              <div className="relative flex items-center justify-center p-4">
-                <svg width="240" height="240" viewBox="0 0 240 240" className="donut-chart md:w-[320px] md:h-[320px]">
-                  <circle cx="120" cy="120" r={95} fill="transparent" stroke="#fee2e2" strokeWidth="24" />
-                  <circle cx="120" cy="120" r={95} fill="transparent" stroke="#22c55e" strokeWidth="24" strokeDasharray={circumference} strokeDashoffset={offset} strokeLinecap="round" style={{ transition: 'stroke-dashoffset 1.2s cubic-bezier(0.4, 0, 0.2, 1)' }} />
-                </svg>
-                <div className="absolute inset-0 flex flex-col items-center justify-center">
-                  <span className="text-4xl md:text-6xl font-black text-slate-800 leading-none">{percentage}%</span>
-                  <span className="text-[10px] text-slate-400 font-bold uppercase mt-2 tracking-widest">Done</span>
-                </div>
-              </div>
-              <div className="w-full md:flex-1 bg-slate-50 p-8 rounded-2xl border text-center shadow-inner">
-                <div className="text-slate-400 text-xs font-black uppercase mb-4 tracking-widest">Stats Summary</div>
-                <div className="text-5xl md:text-7xl font-black text-slate-800 mb-2 tracking-tighter">{completed} <span className="text-slate-300 text-3xl mx-2">/</span> {total}</div>
-                <div className="mt-6 text-xs text-slate-500 bg-white px-6 py-3 rounded-full shadow-sm font-bold border border-slate-100">{total - completed - uncompleted} habits left this month</div>
-              </div>
-            </div>
-          </div>
-        </div>
-      );
-    };
+const handleAccountPick = (name) => {
+if (!activePicker) return;
+const { type, index } = activePicker;
+if (type === 'setupDebits') setInitialSetup(prev => { const n = [...prev.debits]; n[index].account = name; return { ...prev, debits: n }; });
+else if (type === 'setupCredits') setInitialSetup(prev => { const n = [...prev.credits]; n[index].account = name; return { ...prev, credits: n }; });
+else handleUpdateEntryRow(type, index, 'account', name);
+setActivePicker(null); setIsDirty(true);
+};
 
-    // --- 메인 App 컴포넌트 ---
+const handleDragOver = (e) => e.preventDefault();
+const handleAccountDragStart = (id) => setDraggedAccountId(id);
+const handleSubtypeDrop = (subtype, type) => {
+if (!draggedAccountId) return;
+setAccounts(prev => ({ ...prev, [type]: prev[type].map(a => String(a.id) === String(draggedAccountId) ? { ...a, subtype } : a) }));
+setIsDirty(true); setDraggedAccountId(null);
+};
 
-    const App = () => {
-      const [view, setView] = useState('monthly');
-      const [items, setItems] = useState([]);
-      const [currentDate, setCurrentDate] = useState(new Date());
-      const [isSidebarOpen, setIsSidebarOpen] = useState(window.innerWidth >= 768);
-      const [isEditorOpen, setIsEditorOpen] = useState(false);
-      const [isSettingsOpen, setIsSettingsOpen] = useState(false);
-      const [isDirty, setIsDirty] = useState(false);
-      const [isLoading, setIsLoading] = useState(true);
-      const [isSyncing, setIsSyncing] = useState(false);
-      const [editingItem, setEditingItem] = useState(null);
-      
-      const [errorMsg, setErrorMsg] = useState("");
-      const [toastMsg, setToastMsg] = useState("");
-      const [isDeleteConfirmOpen, setIsDeleteConfirmOpen] = useState(false);
+return (
+<div className="flex flex-col md:flex-row h-screen bg-slate-50 overflow-hidden text-slate-900">
+{isLoading && <div className="loading-overlay"><div className="w-10 h-10 border-4 border-indigo-600 border-t-transparent rounded-full animate-spin mb-4"></div><p className="font-bold text-indigo-600 text-sm">데이터 동기화 중...</p></div>}
+{statusMessage && <div className="fixed top-4 right-4 z-[300] p-4 rounded-2xl shadow-2xl border bg-emerald-50 border-emerald-200 text-emerald-800 font-bold text-sm">✓ {statusMessage.text}</div>}
 
-      const [settings, setSettings] = useState({ email: '', notificationHour: '08' });
+<Modal isOpen={confirmDialog !== null} onClose={() => setConfirmDialog(null)} title={confirmDialog?.title || '확인'} maxWidth="max-w-md" zIndex="z-[200]">
+<div className="space-y-6 text-center">
+<p className="font-medium text-slate-600 leading-relaxed text-sm">{confirmDialog?.message}</p>
+<div className="flex gap-3 justify-center pb-2">
+<button onClick={() => setConfirmDialog(null)} className="px-6 py-2 rounded-xl bg-slate-100 font-bold text-sm">취소</button>
+<button onClick={confirmDialog?.onConfirm} className="px-6 py-2 rounded-xl bg-indigo-600 text-white font-bold text-sm shadow-lg">확인</button>
+</div>
+</div>
+</Modal>
 
-      const todayStr = useMemo(() => formatDate(new Date()), []);
+<aside className={`sidebar-transition bg-white border-r border-slate-200 shrink-0 flex flex-col overflow-hidden fixed md:relative z-40 shadow-xl md:shadow-none h-full ${isSidebarOpen ? 'w-64' : 'w-0 md:w-20'}`}>
+<div className="p-6 flex items-center gap-3">
+<div className="bg-indigo-600 p-2 rounded-xl text-white shadow-lg shrink-0"><i data-lucide="wallet"></i></div>
+{isSidebarOpen && <span className="font-bold text-xl animate-in fade-in">DoubleBook</span>}
+</div>
+<nav className="flex-1 px-3 space-y-1 mt-4">
+{[
+{ id: 'BS', label: '재무상태표', icon: 'layout-dashboard' },
+{ id: 'IS', label: '손익계산서', icon: 'pie-chart' },
+{ id: 'GL', label: '총계정원장', icon: 'book-open' }
+].map(nav => (
+<button key={nav.id} onClick={() => { setCurrentView(nav.id); if(window.innerWidth < 768) setIsSidebarOpen(false); }} className={`w-full flex items-center gap-3 p-3 rounded-xl transition-all ${currentView === nav.id ? 'bg-indigo-600 text-white shadow-md' : 'hover:bg-slate-100 text-slate-500'}`}>
+<i data-lucide={nav.icon} className="shrink-0"></i>
+{isSidebarOpen && <span className="font-medium animate-in fade-in whitespace-nowrap">{nav.label}</span>}
+</button>
+))}
+</nav>
+<div className="p-3 border-t text-slate-800 space-y-2 mb-4">
+<button onClick={handleSync} className={`w-full flex items-center gap-3 p-3 rounded-xl mb-2 font-bold transition-all ${isDirty ? 'bg-orange-500 text-white animate-pulse shadow-lg' : 'bg-slate-100 text-slate-400'}`}>
+<i data-lucide="cloud-upload" className="shrink-0"></i>
+{isSidebarOpen && <span className="animate-in fade-in whitespace-nowrap">클라우드 저장</span>}
+</button>
+<button onClick={() => { setIsSettingsModalOpen(true); if(window.innerWidth < 768) setIsSidebarOpen(false); }} className="w-full flex items-center gap-3 p-3 rounded-xl hover:bg-slate-100 font-bold transition-colors">
+<i data-lucide="settings" className="shrink-0"></i>
+{isSidebarOpen && <span className="animate-in fade-in whitespace-nowrap">설정</span>}
+</button>
+</div>
+</aside>
 
-      const [formData, setFormData] = useState({
-        title: '', date: formatDate(new Date()), time: '', location: '', description: '', type: 'Schedule', importance: 'None', status: ''
-      });
+{isSidebarOpen && <div onClick={() => setIsSidebarOpen(false)} className="md:hidden fixed inset-0 bg-black/40 z-30 backdrop-blur-sm animate-in fade-in"></div>}
 
-      useEffect(() => {
-        if (typeof google !== 'undefined') {
-          google.script.run.withSuccessHandler(data => {
-            setItems((data || []).map(it => ({ ...it, date: formatDate(it.date) })));
-            setIsLoading(false);
-          }).loadData();
-          
-          google.script.run.withSuccessHandler(res => {
-            if(res) setSettings(res);
-          }).getSettings();
-        } else {
-          setIsLoading(false);
-        }
-      }, []);
+<main className="flex-1 flex flex-col overflow-hidden relative">
+<header className="h-14 sm:h-16 bg-white border-b flex items-center justify-between px-3 sm:px-6 shrink-0 z-10 shadow-sm text-slate-800">
+<div className="flex items-center gap-3 sm:gap-6">
+<button onClick={() => setIsSidebarOpen(!isSidebarOpen)} className="p-2 hover:bg-slate-100 rounded-lg text-slate-500"><i data-lucide={isSidebarOpen ? 'chevron-left' : 'menu'} className="w-5 h-5"></i></button>
+<div className="flex items-center gap-1 sm:gap-3 bg-slate-50 px-2 sm:px-3 py-1.5 rounded-xl border border-slate-100 text-slate-700 font-bold">
+<i data-lucide="calendar" className="text-indigo-500 w-3 h-3 sm:w-4 sm:h-4"></i>
+<input type="date" className="bg-transparent border-none outline-none text-[11px] sm:text-sm font-bold w-24 sm:w-32 cursor-pointer text-slate-700" value={standardDate} onChange={(e) => setStandardDate(e.target.value)} />
+</div>
+</div>
+<div className="flex items-center gap-2">
+<button onClick={handleClosing} className="flex items-center gap-1.5 bg-slate-100 hover:bg-slate-200 text-slate-600 px-3 sm:px-5 py-2 sm:py-2.5 rounded-xl sm:rounded-2xl font-bold border border-slate-200 transition-all text-[11px] sm:text-sm active:scale-95 shadow-sm">
+<i data-lucide="calculator" className="w-3.5 h-3.5 sm:w-4 sm:h-4"></i><span>결산 실행</span>
+</button>
+<button onClick={() => { setEntryRows({ date: standardDate, debits: [{ account: '', amount: 0 }], credits: [{ account: '', amount: 0 }], memo: '' }); setIsEntryModalOpen(true); }} className="flex items-center gap-1.5 bg-indigo-600 hover:bg-indigo-700 text-white px-3 sm:px-5 py-2 sm:py-2.5 rounded-xl sm:rounded-2xl font-bold shadow-md active:scale-95 transition-all text-[11px] sm:text-sm">
+<i data-lucide="plus-circle" className="w-3.5 h-3.5 sm:w-4 sm:h-4"></i><span>거래 입력</span>
+</button>
+</div>
+</header>
 
-      const showToast = (msg) => {
-        setToastMsg(msg);
-        setTimeout(() => setToastMsg(""), 3000);
-      };
+<div className="flex-1 overflow-y-auto p-3 sm:p-8 pb-24">
+{currentView === 'BS' && (
+<div className="max-w-6xl mx-auto flex flex-col lg:grid lg:grid-cols-2 lg:gap-px bg-slate-100 lg:rounded-3xl overflow-hidden lg:border shadow-lg rounded-2xl border border-slate-200 text-slate-800">
+<div className="bg-white p-5 sm:p-8 border-b lg:border-none">
+<h3 className="text-sm sm:text-xl font-black text-indigo-600 border-b-2 border-indigo-500 pb-2 mb-4 sm:mb-6 uppercase tracking-widest text-center">Assets</h3>
+<div className="space-y-3 sm:space-y-4 min-h-[100px] sm:min-h-[250px]">
+{accounts.assets.filter(acc =>  (accountBalances[acc.name] || 0) !== 0).map(acc => (<div key={acc.id} className="flex justify-between items-center"><span className="text-xs sm:text-base text-slate-600 font-medium">{acc.name}</span><span className="font-mono font-bold text-sm sm:text-lg">{(accountBalances[acc.name] || 0).toLocaleString()}원</span></div>))}
+</div>
+<div className="mt-6 sm:mt-8 pt-4 border-t-2 border-slate-50 flex justify-between items-center font-black"><span className="text-xs sm:text-lg uppercase">Total Assets</span><span className="font-mono font-black text-lg sm:text-2xl text-indigo-600">{totalAssets.toLocaleString()}원</span></div>
+</div>
+<div className="bg-white p-5 sm:p-8 flex flex-col text-slate-800">
+<div className="flex-1">
+<h3 className="text-sm sm:text-xl font-black text-red-500 border-b-2 border-red-500 pb-2 mb-4 sm:mb-6 uppercase tracking-widest text-center">Liabilities</h3>
+<div className="space-y-3 sm:space-y-4 mb-8 sm:mb-12">
+{accounts.liabilities.filter(a => a.name !== '이익잉여금' && (accountBalances[a.name] || 0) !== 0).map(acc => (<div key={acc.id} className="flex justify-between items-center"><span className="text-xs sm:text-base text-slate-600 font-medium">{acc.name}</span><span className="font-mono font-bold text-sm sm:text-lg">{Math.abs(accountBalances[acc.name] || 0).toLocaleString()}원</span></div>))}
+</div>
+<h3 className="text-[10px] sm:text-xs font-black text-emerald-600 border-b border-emerald-200 pb-2 mb-3 sm:mb-4 uppercase tracking-widest">Equity</h3>
+<div className="space-y-2 sm:space-y-3 font-bold">
+<div className="flex justify-between items-center text-[11px] sm:text-sm"><span>자본금</span><span className="font-mono">{calculatedInitialCapital.toLocaleString()}원</span></div>
+<div className="flex justify-between items-center bg-emerald-50 p-2 sm:p-3 rounded-xl border border-emerald-100 font-bold text-emerald-700"><span className="text-[10px] sm:text-xs">이익Í잉여금 (누적)</span><span className="font-mono text-xs sm:text-base">{retainedEarningsBalance.toLocaleString()}원</span></div>
+<div className="flex justify-between items-center border-t border-slate-50 pt-3"><span className="text-slate-400 text-[10px] sm:text-xs italic">당기순손익 (미결산)</span><span className={`font-mono text-xs sm:text-base font-bold ${unsettledNetIncome >= 0 ? 'text-emerald-600' : 'text-red-500'}`}>{unsettledNetIncome.toLocaleString()}원</span></div>
+</div>
+</div>
+<div className="mt-6 sm:mt-8 pt-4 border-t-2 border-slate-50 flex justify-between items-center font-black"><span className="text-xs sm:text-lg uppercase">Total L+E</span><span className="font-mono text-lg sm:text-2xl text-indigo-600">{(totalLiabilitiesOnly + currentEquity).toLocaleString()}원</span></div>
+</div>
+</div>
+)}
 
-      const handleSync = () => {
-        setIsSyncing(true);
-        if (typeof google !== 'undefined') {
-          google.script.run.withSuccessHandler(() => { 
-            setIsDirty(false); 
-            setIsSyncing(false); 
-            showToast("Cloud 저장 완료!");
-          }).saveData(items);
-        } else {
-          setTimeout(() => { setIsDirty(false); setIsSyncing(false); showToast("로컬 저장 완료 (데모)"); }, 800);
-        }
-      };
+{currentView === 'IS' && (
+<div className="max-w-4xl mx-auto bg-white rounded-3xl border shadow-md p-5 sm:p-8 space-y-8 sm:space-y-12 text-slate-800">
+<section>
+<div className="flex justify-between items-end border-b-4 border-emerald-500 pb-2 mb-4 sm:mb-6 font-black"><h3 className="text-base sm:text-2xl text-emerald-600 uppercase">I. Revenue</h3><span className="font-mono text-lg sm:text-2xl font-black text-emerald-600">{revenueHierarchy.total.toLocaleString()}원</span></div>
+<div className="grid grid-cols-1 sm:grid-cols-2 gap-3 sm:gap-4">
+{revenueHierarchy.groups.filter(g => g.subtotal !== 0).map(group => (
+<div key={group.label} className="bg-slate-50 rounded-2xl p-4 border text-slate-800 font-bold">
+<div className="flex justify-between text-[10px] sm:text-xs font-black text-slate-400 uppercase mb-3 border-b pb-1"><span>{group.label}</span><span>{group.subtotal.toLocaleString()}원</span></div>
+<div className="space-y-1">
+{group.accounts.map(a => (
+<div key={a.name} className="flex justify-between text-[11px] sm:text-sm py-0.5 italic"><span>{a.name}</span><span className="font-mono">{a.amount.toLocaleString()}원</span></div>
+))}
+</div>
+</div>
+))}
+</div>
+</section>
+<section>
+<div className="flex justify-between items-end border-b-4 border-orange-500 pb-2 mb-4 sm:mb-6 font-black"><h3 className="text-base sm:text-2xl text-orange-600 uppercase">II. Expenses</h3><span className="font-mono text-lg sm:text-2xl font-black text-orange-600">{expensesHierarchy.total.toLocaleString()}원</span></div>
+<div className="grid grid-cols-1 sm:grid-cols-2 gap-3 sm:gap-4">
+{expensesHierarchy.groups.filter(g => g.subtotal !== 0).map(group => (
+<div key={group.label} className="bg-slate-50 rounded-2xl p-4 border text-slate-800 font-bold">
+<div className="flex justify-between text-[10px] sm:text-xs font-black text-slate-400 uppercase mb-3 border-b pb-1"><span>{group.label}</span><span>{group.subtotal.toLocaleString()}원</span></div>
+<div className="space-y-1">
+{group.accounts.map(a => (
+<div key={a.name} className="flex justify-between text-[11px] sm:text-sm py-0.5 italic"><span>{a.name}</span><span className="font-mono">{a.amount.toLocaleString()}원</span></div>
+))}
+</div>
+</div>
+))}
+</div>
+</section>
+<div className={`p-5 sm:p-8 rounded-2xl sm:rounded-3xl flex justify-between items-center shadow-inner border-2 sm:border-4 ${reportNetIncome >= 0 ? 'bg-emerald-50 border-emerald-100' : 'bg-red-50 border-red-100'}`}><div className="shrink-0 font-black"><h4 className="font-black text-sm sm:text-xl uppercase tracking-tighter text-slate-700">Net Income</h4></div><span className={`font-mono text-xl sm:text-5xl font-black ${reportNetIncome >= 0 ? 'text-emerald-600' : 'text-red-500'}`}>{reportNetIncome.toLocaleString()}원</span></div>
+</div>
+)}
 
-      const handleSaveSettings = () => {
-        setIsSyncing(true);
-        if (typeof google !== 'undefined') {
-          google.script.run.withSuccessHandler(() => {
-            setIsSyncing(false);
-            setIsSettingsOpen(false);
-            showToast("메일 설정이 적용되었습니다.");
-          }).saveSettings(settings);
-        } else {
-           setTimeout(() => { setIsSyncing(false); setIsSettingsOpen(false); showToast("설정 적용 완료 (데모)"); }, 800);
-        }
-      };
+{currentView === 'GL' && (
+<div className="max-w-6xl mx-auto grid grid-cols-1 sm:grid-cols-2 gap-3 sm:gap-6 text-slate-800 pb-10">
+{['assets', 'liabilities', 'revenue', 'expenses'].map(cat => (
+<div key={cat} className="bg-white p-4 sm:p-6 rounded-2xl border shadow-sm h-fit"><h3 className="text-[10px] sm:text-xs font-black uppercase text-slate-400 mb-3 text-center tracking-widest">{cat.toUpperCase()} Accounts</h3><div className="space-y-1.5">{(accounts[cat] || []).map(a => (<div key={a.id} className="flex justify-between p-3 bg-slate-50 rounded-xl border border-transparent font-bold"><span className="text-xs sm:text-base">{a.name}</span><span className="font-mono text-sm sm:text-base">{(cat==='liabilities'||cat==='revenue' ? Math.abs(accountBalances[a.name] || 0) : accountBalances[a.name] || 0).toLocaleString()}원</span></div>))}</div></div>
+))}
+</div>
+)}
+</div>
+</main>
 
-      const openEditor = (item = null) => {
-        setErrorMsg(""); setIsDeleteConfirmOpen(false);
-        if (item) { setEditingItem(item); setFormData({ ...item }); }
-        else { setEditingItem(null); setFormData({ title: '', date: formatDate(new Date()), time: '', location: '', description: '', type: 'Schedule', importance: 'None', status: '' }); }
-        setIsEditorOpen(true);
-      };
+<Modal isOpen={isSettingsModalOpen} onClose={() => setIsSettingsModalOpen(false)} title="더블북 환경 설정" maxWidth="max-w-5xl" zIndex="z-[100]">
+<div className="flex flex-col md:flex-row gap-4 h-[78vh] md:h-[650px] overflow-hidden text-slate-800">
+<div className="flex md:flex-col overflow-x-auto pb-1 md:pb-0 gap-1.5 w-full md:w-48 shrink-0">
+{[{ id: 'equity', label: '자본금', icon: 'coins' }, { id: 'accounts', label: '계정과목', icon: 'settings' }, { id: 'editTransactions', label: '거래 관리', icon: 'edit-3' }].map(tab => (
+<button key={tab.id} onClick={() => setSettingsTab(tab.id)} className={`flex items-center justify-center md:justify-start gap-2 p-3 sm:p-4 rounded-xl font-bold transition-all flex-1 md:flex-none text-xs sm:text-sm whitespace-nowrap ${settingsTab === tab.id ? 'bg-indigo-600 text-white shadow-md' : 'bg-slate-50 text-slate-400 hover:bg-slate-100'}`}><i data-lucide={tab.icon} className="w-4 h-4"></i>{tab.label}</button>
+))}
+</div>
+<div className="flex-1 overflow-y-auto pr-0 md:pr-4 modal-scroll pb-10">
+{settingsTab === 'equity' && (
+<div className="space-y-6">
+<h4 className="text-sm font-black uppercase tracking-widest text-slate-800 ml-1">자본금 및 기초 부채</h4>
+<div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+<div className="bg-white rounded-2xl border border-slate-200 overflow-hidden flex flex-col shadow-sm">
+<div className="bg-indigo-600 text-white p-2 text-center text-[10px] font-black uppercase">Debit (차변 - 기초 자산)</div>
+<div className="p-3 space-y-2 min-h-[150px] flex-1">
+{(initialSetup.debits || []).map((r, i) => (
+<div key={i} className="flex gap-2 items-center">
+<button onClick={() => setActivePicker({ type: 'setupDebits', index: i })} className="flex-1 p-2.5 rounded-lg bg-slate-50 text-[11px] font-bold border border-slate-100 text-left truncate">{r.account || '자산 선택'}</button>
+<input type="number" className="w-20 sm:w-28 p-2 rounded-lg bg-white text-right font-black border border-slate-200 text-indigo-600 text-xs sm:text-sm outline-none" value={r.amount || ''} onChange={(e) => { const val = Number(e.target.value); setInitialSetup(prev => { const n = [...prev.debits]; n[i] = { ...n[i], amount: val }; return { ...prev, debits: n }; }); setIsDirty(true); }} />
+<button onClick={()=>{ setInitialSetup(prev => { const n = [...prev.debits]; if (n.length > 1) n.splice(i, 1); return { ...prev, debits: n }; }); setIsDirty(true); }} className="text-slate-300 hover:text-red-500 p-1"><TrashIcon/></button>
+</div>
+))}
+<button onClick={() => { setInitialSetup(prev => ({ ...prev, debits: [...(prev.debits || []), { account: '', amount: 0 }] })); setIsDirty(true); }} className="w-full p-2 mt-2 text-[10px] font-black text-indigo-500 border border-dashed border-indigo-200 rounded-lg hover:bg-indigo-50">+ 자산 추가</button>
+</div>
+<div className="bg-slate-50 p-3 flex justify-between font-black border-t text-xs"><span className="text-[9px] uppercase text-slate-400">Sum of Assets</span><span className="font-mono text-indigo-600 font-black">{setupTotalDebits.toLocaleString()}원</span></div>
+</div>
+<div className="bg-white rounded-2xl border border-slate-200 overflow-hidden flex flex-col h-fit shadow-sm">
+<div className="bg-emerald-600 text-white p-2 text-center text-[10px] font-black uppercase">Credit (대변 - 자본/부채)</div>
+<div className="p-3 space-y-3">
+<div className="p-3 bg-emerald-50 rounded-xl border border-emerald-100 flex justify-between items-center"><span className="font-bold text-emerald-800 text-[11px] sm:text-sm font-black">자본금 (자동 계산)</span><span className="font-mono font-black text-emerald-600 text-xs sm:text-lg">{calculatedInitialCapital.toLocaleString()}원</span></div>
+<div className="text-[9px] font-black text-slate-300 uppercase tracking-widest pt-1 border-t mb-1">기초 부채 내역</div>
+{(initialSetup.credits || []).map((r, i) => (
+<div key={i} className="flex gap-2 items-center">
+<button onClick={() => setActivePicker({ type: 'setupCredits', index: i })} className="flex-1 p-2.5 rounded-lg bg-slate-50 text-[11px] font-bold border border-slate-100 text-left truncate">{r.account || '부채 선택'}</button>
+<input type="number" className="w-20 sm:w-28 p-2 rounded-lg bg-white text-right font-black border border-slate-200 text-red-500 text-xs outline-none" value={r.amount || ''} onChange={(e) => { const val = Number(e.target.value); setInitialSetup(prev => { const n = [...prev.credits]; n[i] = { ...n[i], amount: val }; return { ...prev, credits: n }; }); setIsDirty(true); }} />
+<button onClick={()=>{ setInitialSetup(prev => { const n = [...prev.credits]; n.splice(i, 1); return { ...prev, credits: n }; }); setIsDirty(true); }} className="text-slate-300 hover:text-red-500 p-1"><TrashIcon/></button>
+</div>
+))}
+<button onClick={() => { setInitialSetup(prev => ({ ...prev, credits: [...(prev.credits || []), { account: '', amount: 0 }] })); setIsDirty(true); }} className="w-full p-2 mt-1 text-[10px] font-black text-red-400 border border-dashed border-red-100 rounded-lg hover:bg-red-50">+ 부채 추가</button>
+</div>
+</div>
+</div>
+</div>
+)}
+{settingsTab === 'accounts' && (
+<div className="space-y-10">
+<div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+{['assets', 'liabilities'].map(cat => (
+<div key={cat} className="bg-slate-50 p-4 rounded-2xl border shadow-inner h-fit text-slate-800">
+<div className="flex justify-between items-center mb-3 text-indigo-500 font-black text-[10px] uppercase"><span>{cat.toUpperCase()} Accounts</span><button onClick={() => setAddingToCategory(cat)} className="p-1 hover:bg-indigo-100 rounded-full transition-colors"><i data-lucide="plus" className="w-4 h-4"></i></button></div>
+<div className="space-y-1.5">
+{(accounts[cat] || []).filter(a => a.name !== '이익잉여금').map(a => (
+<div key={a.id} className="flex items-center gap-2 p-2 bg-white rounded-xl border group shadow-sm transition-all hover:border-indigo-200 font-bold">
+<input className="flex-1 bg-transparent border-none outline-none font-bold text-xs sm:text-sm text-slate-800" value={a.name} onChange={(e) => handleUpdateAccountName(cat, a.id, e.target.value)} />
+<button onClick={() => handleDeleteAccount(cat, a.id)} className="sm:opacity-0 group-hover:opacity-100 text-red-400 p-1.5"><TrashIcon/></button>
+</div>
+))}
+{addingToCategory === cat && (
+<div className="p-1"><input autoFocus className="w-full p-2 bg-white rounded-xl border border-indigo-200 text-xs font-bold text-indigo-600 outline-none" placeholder="항목 입력 후 Enter" onBlur={(e) => handleAddAccount(cat, e.target.value)} onKeyDown={(e)=>e.key==='Enter'&&e.target.blur()} /></div>
+)}
+</div>
+</div>
+))}
+</div>
+<div className="space-y-6">
+{['revenue', 'expenses'].map(type => (
+<div key={type} className="border-t pt-5">
+<div className="flex justify-between items-center mb-4"><h5 className="font-black text-indigo-600 uppercase tracking-widest text-[11px]">{type.toUpperCase()} 분류 관리</h5><button onClick={() => setAddingToCategory(type)} className="text-[10px] bg-indigo-600 text-white px-3 py-1.5 rounded-full font-black shadow-sm">+ 추가</button></div>
+<div className="grid grid-cols-1 sm:grid-cols-2 gap-3 sm:gap-4">
+{['fixed', 'variable'].map(subtype => (
+<div key={subtype} onDragOver={handleDragOver} onDrop={() => handleSubtypeDrop(subtype, type)} className="bg-white border-2 border-slate-50 rounded-2xl p-4 sm:p-5 transition-all shadow-sm min-h-[120px]">
+<div className="flex justify-between items-center mb-3 border-b border-slate-50 pb-1.5 text-slate-400 font-black"><span className="uppercase text-[9px] tracking-widest">{subtype === 'fixed' ? '고정 (Fixed)' : '변동 (Variable)'}</span><i data-lucide={subtype === 'fixed' ? 'lock' : 'zap'} className="w-3 h-3"></i></div>
+<div className="grid grid-cols-1 gap-1.5">
+{accounts[type].filter(a => (a.subtype || 'fixed') === subtype).map(acc => (
+<div key={acc.id} draggable onDragStart={() => handleAccountDragStart(acc.id)} className="bg-slate-50 border border-slate-100 px-3 py-2.5 rounded-xl text-xs font-bold flex items-center gap-3 group hover:bg-white hover:border-indigo-100 transition-all text-slate-700 w-full shadow-sm">
+<i data-lucide="grip-vertical" className="text-slate-200 shrink-0 hidden sm:block"></i>
+<input className="bg-transparent border-none outline-none flex-1 font-bold min-w-0" value={acc.name} onChange={(e) => handleUpdateAccountName(type, acc.id, e.target.value)} />
+<button onClick={() => handleDeleteAccount(type, acc.id)} className="sm:opacity-0 group-hover:opacity-100 text-red-400 p-1"><i data-lucide="x" className="w-3.5 h-3.5"></i></button>
+</div>
+))}
+</div>
+</div>
+))}
+</div>
+{addingToCategory === type && (<div className="mt-3 p-3 bg-indigo-50 rounded-2xl border border-indigo-100 text-center"><input autoFocus className="bg-transparent border-none outline-none font-black text-indigo-600 text-center text-xs w-full" placeholder="항목 입력 후 Enter..." onBlur={(e) => handleAddAccount(type, e.target.value)} onKeyDown={(e)=>e.key==='Enter'&&e.target.blur()} /></div>)}
+</div>
+))}
+</div>
+</div>
+)}
+{settingsTab === 'editTransactions' && (
+<div className="space-y-4 pb-10">
+<div className="flex items-center gap-2 mb-4 bg-white p-3 rounded-xl border border-slate-100 text-slate-800 font-bold overflow-x-auto">
+<i data-lucide="search" className="text-slate-300 w-4 h-4 shrink-0"></i><input type="date" className="bg-transparent outline-none font-bold text-[11px] cursor-pointer" value={editRange.start} onChange={(e)=>setEditRange({...editRange, start: e.target.value})}/><span className="text-slate-300">~</span><input type="date" className="bg-transparent outline-none font-bold text-[11px] cursor-pointer" value={editRange.end} onChange={(e)=>setEditRange({...editRange, end: e.target.value})}/>
+</div>
+<div className="space-y-2">
+{transactions.filter(t => t.date >= editRange.start && t.date <= editRange.end).sort((a,b) => b.date.localeCompare(a.date)).map(t => (
+<div key={t.id} onClick={()=>{setEditingTransaction(t); setEntryRows({date:t.date, debits:t.debits, credits:t.credits, memo:t.memo}); setIsEntryModalOpen(true);}} className="p-3.5 bg-white border rounded-xl flex justify-between cursor-pointer hover:border-indigo-500 transition-all shadow-sm active:bg-indigo-50">
+<div><p className="text-[9px] font-black text-slate-400 uppercase">{t.date}</p><p className="font-bold text-xs text-slate-700 mt-0.5">{t.memo || '거래 내역'}</p></div>
+<div className="text-right flex flex-col justify-center"><div className="font-mono font-black text-slate-700 text-xs sm:text-base">{(t.debits.reduce((s,d)=>s+d.amount, 0)).toLocaleString()}원</div></div>
+</div>
+))}
+</div>
+</div>
+)}
+</div>
+</div>
+</Modal>
 
-      const saveItem = () => {
-        if (!formData.title || !formData.date) { setErrorMsg("Title과 Date는 필수 입력 항목입니다."); return; }
-        if (formData.time && !/^([01]\d|2[0-3]):([0-5]\d)$/.test(formData.time)) { setErrorMsg("시간 형식이 올바르지 않습니다 (HH:mm)."); return; }
-        let newItems = editingItem ? items.map(it => it.id === editingItem.id ? { ...formData, id: it.id } : it) : [...items, { ...formData, id: Date.now().toString() }];
-        setItems(newItems); setIsDirty(true); setIsEditorOpen(false);
-      };
+<Modal isOpen={isEntryModalOpen} onClose={() => {setIsEntryModalOpen(false); setEditingTransaction(null);}} title={editingTransaction?"전표 수정":"전표 입력"} maxWidth="max-w-6xl" zIndex="z-[120]">
+<div className="flex flex-col lg:flex-row gap-4 sm:gap-6 text-slate-800">
+<div className="w-full lg:w-48 shrink-0 bg-slate-50 p-4 rounded-2xl border h-fit shadow-inner">
+<label className="block text-[9px] font-black text-slate-400 uppercase mb-2 text-center lg:text-left">전표 날짜</label>
+<input type="date" className="w-full p-2.5 rounded-xl border text-xs font-bold outline-none mb-3 shadow-sm bg-white text-slate-700" value={entryRows.date} onChange={(e) => setEntryRows({...entryRows, date: e.target.value})} />
+{editingTransaction && (<button onClick={handleDeleteTransaction} className="w-full p-3 bg-red-50 text-red-500 rounded-xl font-bold text-[11px] hover:bg-red-500 hover:text-white transition-all shadow-sm flex items-center justify-center gap-2"><i data-lucide="trash-2" className="w-3.5 h-3.5"></i>삭제하기</button>)}
+</div>
+<div className="flex-1 space-y-4 pb-20 sm:pb-0">
+<div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+<div className="bg-white rounded-2xl border shadow-sm flex flex-col overflow-hidden">
+<div className="bg-indigo-600 text-white p-2 font-black text-center text-[10px] uppercase">Debit (차변)</div>
+<div className="p-3 space-y-2 min-h-[120px] sm:min-h-[250px] flex-1">
+{entryRows.debits.map((r, i) => (
+<div key={i} className="flex gap-1.5 items-center animate-in slide-in-from-left-2">
+<button onClick={() => setActivePicker({ type: 'debits', index: i })} className="flex-1 p-2.5 rounded-lg bg-slate-50 text-[11px] font-bold border border-slate-100 text-left truncate active:bg-indigo-50">{r.account || '계정 선택'}</button>
+<input type="number" className="w-20 sm:w-28 p-2 rounded-lg bg-white text-right font-black border border-slate-200 text-xs outline-none" placeholder="0" value={r.amount || ''} onChange={(e) => handleUpdateEntryRow('debits', i, 'amount', Number(e.target.value))} />
+<button onClick={()=>{const n=[...entryRows.debits]; if(n.length>1){n.splice(i,1); setEntryRows(prev => ({...prev, debits:n}));}}} className="text-slate-300 hover:text-red-500 p-1"><TrashIcon/></button>
+</div>
+))}
+<button onClick={() => setEntryRows(prev => ({...prev, debits: [...prev.debits, {account:'', amount:0}]}))} className="w-full p-2 mt-1 text-[10px] font-black text-indigo-500 border border-dashed border-indigo-200 rounded-lg hover:bg-indigo-50">+ 행 추가</button>
+</div>
+<div className="bg-slate-50 p-2.5 flex justify-between font-black border-t text-xs sm:text-base"><span className="text-[9px] uppercase text-slate-400">Total Debit</span><span className="font-mono text-indigo-600 font-black">{totalDebitSum.toLocaleString()}원</span></div>
+</div>
+<div className="bg-white rounded-2xl border shadow-sm flex flex-col overflow-hidden">
+<div className="bg-red-500 text-white p-2 font-black text-center text-[10px] uppercase">Credit (대변)</div>
+<div className="p-3 space-y-2 min-h-[120px] sm:min-h-[250px] flex-1">
+{entryRows.credits.map((r, i) => (
+<div key={i} className="flex gap-1.5 items-center animate-in slide-in-from-right-2">
+<button onClick={() => setActivePicker({ type: 'credits', index: i })} className="flex-1 p-2.5 rounded-lg bg-slate-50 text-[11px] font-bold border border-slate-100 text-left truncate active:bg-red-50">{r.account || '계정 선택'}</button>
+<input type="number" className="w-20 sm:w-28 p-2 rounded-lg bg-white text-right font-black border border-slate-200 text-xs outline-none" placeholder="0" value={r.amount || ''} onChange={(e) => handleUpdateEntryRow('credits', i, 'amount', Number(e.target.value))} />
+<button onClick={()=>{const n=[...entryRows.credits]; if(n.length>1){n.splice(i,1); setEntryRows(prev => ({...prev, credits:n}));}}} className="text-slate-300 hover:text-red-500 p-1"><TrashIcon/></button>
+</div>
+))}
+<button onClick={() => setEntryRows(prev => ({...prev, credits: [...prev.credits, {account:'', amount:0}]}))} className="w-full p-2 mt-1 text-[10px] font-black text-red-500 border border-dashed border-red-200 rounded-lg hover:bg-red-50">+ 행 추가</button>
+</div>
+<div className="bg-slate-50 p-2.5 flex justify-between font-black border-t text-xs sm:text-base"><span className="text-[9px] uppercase text-slate-400">Total Credit</span><span className="font-mono text-red-500 font-black">{totalCreditSum.toLocaleString()}원</span></div>
+</div>
+</div>
+<div className="bg-slate-50 p-3 sm:p-4 rounded-2xl border flex flex-col gap-3 shadow-inner">
+<input type="text" className="w-full bg-white p-2.5 rounded-xl border border-slate-200 outline-none font-bold placeholder:text-slate-300 text-slate-700 text-xs sm:text-base" placeholder="거래 메모를 입력하세요 (예: 식비 결제)" value={entryRows.memo} onChange={(e) => setEntryRows({...entryRows, memo: e.target.value})} />
+<div className="flex items-center justify-between gap-4">
+<span className={`px-4 py-2 rounded-full text-[10px] font-black uppercase shadow-sm ${totalDebitSum === totalCreditSum && totalDebitSum > 0 ? 'bg-emerald-500 text-white' : 'bg-slate-200 text-slate-500'}`}>{totalDebitSum === totalCreditSum && totalDebitSum > 0 ? '차대일치' : '불일치'}</span>
+<button onClick={handleSaveEntry} disabled={totalDebitSum !== totalCreditSum || totalDebitSum === 0} className="flex-1 bg-indigo-600 hover:bg-indigo-700 disabled:bg-slate-300 text-white px-6 py-3 rounded-xl font-black shadow-lg transition-all active:scale-95 text-xs sm:text-sm whitespace-nowrap">전표 저장하기</button>
+</div>
+</div>
+</div>
+</div>
+</Modal>
 
-      const confirmDelete = () => {
-        setItems(items.filter(it => it.id !== editingItem.id)); setIsDirty(true); setIsEditorOpen(false); setIsDeleteConfirmOpen(false);
-      };
+<Modal isOpen={activePicker !== null} onClose={() => setActivePicker(null)} title="계정과목 선택" maxWidth="max-w-4xl" zIndex="z-[150]">
+<AccountGridPicker accounts={accounts} onPick={handleAccountPick} />
+</Modal>
+</div>
+);
+};
 
-      const toggleHabitStatus = useCallback((id) => {
-        setItems(prevItems => prevItems.map(it => {
-          if (it.id === id) {
-            let nextStatus = it.status === '' ? 'CHECK' : it.status === 'CHECK' ? 'X' : '';
-            return { ...it, status: nextStatus };
-          }
-          return it;
-        }));
-        setIsDirty(true);
-      }, []);
-
-      const changeView = (v) => { setView(v); if (window.innerWidth < 768) setIsSidebarOpen(false); };
-
-      return (
-        <div className="flex h-screen w-full overflow-hidden font-sans relative">
-          
-          {/* 로딩 오버레이 */}
-          {isLoading && items.length === 0 && (
-            <div className="fixed inset-0 z-[200] bg-white flex flex-col items-center justify-center">
-               <div className="w-16 h-16 border-4 border-blue-100 border-t-blue-600 rounded-full animate-spin mb-4"></div>
-               <p className="font-bold text-slate-400 tracking-widest animate-pulse uppercase text-xs">Connecting to Cloud...</p>
-            </div>
-          )}
-
-          {/* 성공 알림 토스트 */}
-          {toastMsg && (
-            <div className="fixed bottom-10 left-1/2 -translate-x-1/2 z-[300] toast-up">
-              <div className="bg-slate-900 text-white px-8 py-4 rounded-2xl font-bold shadow-2xl flex items-center gap-3 border border-white/10">
-                <i className="fas fa-check-circle text-green-400"></i>
-                {toastMsg}
-              </div>
-            </div>
-          )}
-
-          {/* 사이드바 */}
-          <div className={`fixed md:static inset-0 z-50 transition-all duration-300 ease-in-out overflow-hidden ${isSidebarOpen ? 'translate-x-0 w-[80%] md:w-64' : '-translate-x-full md:translate-x-0 md:w-20'} bg-slate-900 text-white flex flex-col shrink-0`}>
-            <div className="p-6 flex items-center justify-between border-b border-slate-800 h-20 shrink-0">
-              <div className="flex items-center gap-4">
-                <button onClick={() => setIsSidebarOpen(!isSidebarOpen)} className="text-white hover:text-blue-400 transition-colors">
-                  <i className={`fas ${isSidebarOpen ? 'fa-times' : 'fa-bars'} text-xl`}></i>
-                </button>
-                {isSidebarOpen && <span className="font-black tracking-tighter text-2xl bg-gradient-to-r from-blue-400 to-emerald-400 bg-clip-text text-transparent">PLANNER</span>}
-              </div>
-            </div>
-            <nav className="flex-1 px-4 py-8 space-y-3">
-              <button onClick={() => changeView('monthly')} className={`w-full flex items-center gap-4 p-4 rounded-xl transition-all ${view === 'monthly' ? 'bg-blue-600 shadow-lg' : 'text-slate-400 hover:bg-slate-800'}`}>
-                <i className="fas fa-calendar-alt w-6 text-center text-lg"></i>
-                {isSidebarOpen && <span className="font-bold whitespace-nowrap">Monthly</span>}
-              </button>
-              <button onClick={() => changeView('weekly')} className={`w-full flex items-center gap-4 p-4 rounded-xl transition-all ${view === 'weekly' ? 'bg-blue-600 shadow-lg' : 'text-slate-400 hover:bg-slate-800'}`}>
-                <i className="fas fa-calendar-week w-6 text-center text-lg"></i>
-                {isSidebarOpen && <span className="font-bold whitespace-nowrap">Weekly</span>}
-              </button>
-              <button onClick={() => changeView('achievement')} className={`w-full flex items-center gap-4 p-4 rounded-xl transition-all ${view === 'achievement' ? 'bg-blue-600 shadow-lg' : 'text-slate-400 hover:bg-slate-800'}`}>
-                <i className="fas fa-chart-pie w-6 text-center text-lg"></i>
-                {isSidebarOpen && <span className="font-bold whitespace-nowrap">Achievement</span>}
-              </button>
-            </nav>
-            <div className="p-4 border-t border-slate-800">
-              <button onClick={handleSync} disabled={isSyncing} className={`w-full flex items-center justify-center gap-3 p-4 rounded-xl text-sm font-black transition-all ${isDirty ? 'btn-sync-dirty' : 'bg-slate-800 text-slate-500'}`}>
-                <i className={`fas ${isSyncing ? 'fa-spinner fa-spin' : 'fa-cloud-upload-alt'} text-lg`}></i>
-                {isSidebarOpen && <span className="whitespace-nowrap">{isSyncing ? 'Syncing...' : 'Save Cloud'}</span>}
-              </button>
-            </div>
-          </div>
-          
-          {isSidebarOpen && window.innerWidth < 768 && <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-40" onClick={() => setIsSidebarOpen(false)}></div>}
-
-          <div className="flex-1 flex flex-col relative overflow-hidden bg-slate-50">
-            <header className="h-20 bg-white border-b px-4 md:px-8 flex items-center justify-between shrink-0 shadow-sm z-10">
-              <div className="flex items-center gap-4">
-                {(!isSidebarOpen || window.innerWidth < 768) && (
-                  <button onClick={() => setIsSidebarOpen(true)} className="w-10 h-10 bg-slate-900 text-white rounded-xl flex items-center justify-center shadow-lg transition-all active:scale-95">
-                    <i className="fas fa-bars"></i>
-                  </button>
-                )}
-                <h1 className="font-black text-xl uppercase text-slate-800 tracking-tight">{view} overview</h1>
-              </div>
-              <div className="flex items-center gap-3">
-                <button onClick={() => setIsSettingsOpen(true)} className="w-10 h-10 flex items-center justify-center rounded-xl bg-slate-100 text-slate-500 hover:bg-slate-200 transition-colors shadow-sm">
-                  <i className="fas fa-cog text-xl"></i>
-                </button>
-                <button onClick={() => openEditor()} className="bg-blue-600 text-white px-5 py-2.5 rounded-xl text-sm font-black shadow-lg shadow-blue-200 transition-transform active:scale-95">
-                  <i className="fas fa-plus mr-2"></i> NEW
-                </button>
-              </div>
-            </header>
-
-            <main className="flex-1 flex flex-col overflow-hidden">
-              {view === 'monthly' && <MonthlyView items={items} currentDate={currentDate} setCurrentDate={setCurrentDate} setView={setView} openEditor={openEditor} todayStr={todayStr} />}
-              {view === 'weekly' && <WeeklyView items={items} currentDate={currentDate} setCurrentDate={setCurrentDate} toggleHabitStatus={toggleHabitStatus} openEditor={openEditor} todayStr={todayStr} />}
-              {view === 'achievement' && <AchievementView items={items} currentDate={currentDate} />}
-            </main>
-
-            {/* 환경설정 모달 */}
-            {isSettingsOpen && (
-              <div className="fixed inset-0 bg-slate-900/60 flex items-center justify-center z-[150] p-4 backdrop-blur-md">
-                <div className="bg-white w-full max-w-md rounded-3xl shadow-2xl overflow-hidden flex flex-col border border-white/20">
-                  <div className="p-8 border-b flex justify-between items-center bg-slate-50/50">
-                    <h3 className="text-2xl font-black text-slate-800 tracking-tight">Mail Settings</h3>
-                    <button onClick={() => setIsSettingsOpen(false)} className="w-10 h-10 flex items-center justify-center rounded-full bg-slate-100 text-slate-400 hover:text-red-500 transition-all"><i className="fas fa-times"></i></button>
-                  </div>
-                  <div className="p-8 space-y-6">
-                    <div>
-                      <label className="text-[10px] font-black text-slate-400 uppercase block mb-2 px-1">Receiver Email</label>
-                      <input type="email" className="w-full p-4 bg-slate-100 border-2 border-transparent rounded-2xl focus:bg-white focus:border-blue-500 outline-none font-bold text-slate-700 shadow-inner" placeholder="example@gmail.com" value={settings.email} onChange={e => setSettings({...settings, email: e.target.value})} />
-                    </div>
-                    <div>
-                      <label className="text-[10px] font-black text-slate-400 uppercase block mb-2 px-1">Notification Time (Daily)</label>
-                      <select className="w-full p-4 bg-slate-100 border-2 border-transparent rounded-2xl focus:bg-white focus:border-blue-500 outline-none font-bold text-slate-700 appearance-none shadow-inner" value={settings.notificationHour} onChange={e => setSettings({...settings, notificationHour: e.target.value})}>
-                        {Array.from({length: 24}).map((_, i) => (
-                          <option key={i} value={String(i).padStart(2, '0')}>{String(i).padStart(2, '0')}:00</option>
-                        ))}
-                      </select>
-                      <p className="mt-2 text-[10px] text-slate-400 px-1 font-medium">* 매일 지정된 시간에 오늘 일정을 메일로 보냅니다.</p>
-                    </div>
-                  </div>
-                  <div className="p-8 border-t bg-slate-50/50">
-                    <button onClick={handleSaveSettings} disabled={isSyncing} className="w-full bg-blue-600 text-white p-5 rounded-2xl font-black text-sm shadow-xl shadow-blue-200 transition-all active:scale-95 uppercase tracking-widest">
-                      {isSyncing ? <i className="fas fa-spinner fa-spin mr-2"></i> : null}
-                      {isSyncing ? 'Applying...' : 'Apply Settings'}
-                    </button>
-                  </div>
-                </div>
-              </div>
-            )}
-
-            {/* 에디터 모달 */}
-            {isEditorOpen && (
-              <div className="fixed inset-0 bg-slate-900/60 flex items-center justify-center z-[100] p-2 md:p-4 backdrop-blur-md">
-                <div className="bg-white w-full max-w-lg rounded-3xl shadow-2xl overflow-hidden flex flex-col border border-white/20 relative">
-                  {isDeleteConfirmOpen && (
-                    <div className="absolute inset-0 bg-white/95 z-[120] flex flex-col items-center justify-center p-8 text-center animate-in fade-in zoom-in duration-200">
-                      <div className="w-16 h-16 bg-red-100 text-red-500 rounded-full flex items-center justify-center text-2xl mb-4"><i className="fas fa-trash-alt"></i></div>
-                      <h4 className="text-xl font-black text-slate-800 mb-2">삭제하시겠습니까?</h4>
-                      <p className="text-slate-400 text-sm mb-8 leading-relaxed text-center px-4">이 작업은 되돌릴 수 없으며<br/>선택한 일정이 영구적으로 삭제됩니다.</p>
-                      <div className="flex gap-3 w-full mt-4">
-                        <button onClick={confirmDelete} className="flex-1 bg-red-500 text-white py-4 rounded-2xl font-black text-sm shadow-lg shadow-red-100 hover:bg-red-600 transition-colors">네, 삭제합니다</button>
-                        <button onClick={() => setIsDeleteConfirmOpen(false)} className="flex-1 bg-slate-100 text-slate-600 py-4 rounded-2xl font-black text-sm hover:bg-slate-200 transition-colors">취소</button>
-                      </div>
-                    </div>
-                  )}
-
-                  <div className="p-6 md:p-8 border-b flex justify-between items-center bg-slate-50/50">
-                    <div>
-                      <h3 className="text-xl md:text-2xl font-black text-slate-800 tracking-tight">{editingItem ? 'Update Item' : 'Create Item'}</h3>
-                      <p className="text-[10px] text-slate-400 font-bold uppercase tracking-widest mt-1 italic">Planning Mode</p>
-                    </div>
-                    <button onClick={() => setIsEditorOpen(false)} className="w-10 h-10 flex items-center justify-center rounded-full bg-slate-100 text-slate-400 hover:bg-red-50 hover:text-red-500 transition-all"><i className="fas fa-times"></i></button>
-                  </div>
-                  
-                  <div className="p-6 md:p-8 space-y-4 md:space-y-6 overflow-y-auto max-h-[65vh] no-scrollbar">
-                    {errorMsg && <div className="p-4 bg-red-500 text-white rounded-2xl text-xs font-bold shake shadow-md flex items-center gap-2"><i className="fas fa-exclamation-circle"></i>{errorMsg}</div>}
-                    <div>
-                      <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest block mb-2 px-1">Title *</label>
-                      <input className="w-full p-3 md:p-4 bg-slate-100 border-2 border-transparent rounded-xl md:rounded-2xl focus:bg-white focus:border-blue-500 outline-none font-bold text-slate-700 text-sm md:text-base transition-all shadow-inner" placeholder="What's the plan?" value={formData.title} onChange={e => { setErrorMsg(""); setFormData({...formData, title: e.target.value}); }} />
-                    </div>
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4 md:gap-6">
-                      <div>
-                        <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest block mb-2 px-1">Date *</label>
-                        <input type="date" className="w-full p-3 md:p-4 bg-slate-100 border-2 border-transparent rounded-xl md:rounded-2xl outline-none font-bold text-slate-700 text-sm shadow-inner" value={formData.date} onChange={e => setFormData({...formData, date: e.target.value})} />
-                      </div>
-                      <div>
-                        <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest block mb-2 px-1">Time (HH:mm)</label>
-                        <input type="text" className="w-full p-3 md:p-4 bg-slate-100 border-2 border-transparent rounded-xl md:rounded-2xl outline-none font-bold text-slate-700 text-sm shadow-inner" placeholder="HH:mm" value={formData.time} onChange={e => setFormData({...formData, time: e.target.value})} />
-                      </div>
-                    </div>
-                    <div>
-                      <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest block mb-2 px-1">Location</label>
-                      <input className="w-full p-3 md:p-4 bg-slate-100 border-2 border-transparent rounded-xl md:rounded-2xl focus:bg-white focus:border-blue-500 outline-none font-bold text-slate-700 text-sm shadow-inner" placeholder="Where?" value={formData.location} onChange={(e) => setFormData({...formData, location: e.target.value})} />
-                    </div>
-                    <div>
-                      <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest block mb-2 px-1">Description</label>
-                      <textarea className="w-full p-3 md:p-4 bg-slate-100 border-2 border-transparent rounded-xl md:rounded-2xl h-24 md:h-28 resize-none focus:bg-white focus:border-blue-500 outline-none font-medium text-slate-600 text-sm shadow-inner" placeholder="Details..." value={formData.description} onChange={(e) => setFormData({...formData, description: e.target.value})}></textarea>
-                    </div>
-                    <div className="grid grid-cols-2 gap-4 md:gap-6">
-                      <div>
-                        <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest block mb-2 px-1">Type *</label>
-                        <select className="w-full p-3 md:p-4 bg-slate-100 border-2 border-transparent rounded-xl md:rounded-2xl outline-none font-bold text-slate-700 text-sm shadow-inner" value={formData.type} onChange={(e) => setFormData({...formData, type: e.target.value})}>
-                          <option value="Schedule">Schedule</option>
-                          <option value="Habit">Habit</option>
-                        </select>
-                      </div>
-                      <div>
-                        <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest block mb-2 px-1">Importance *</label>
-                        <select className="w-full p-3 md:p-4 bg-slate-100 border-2 border-transparent rounded-xl md:rounded-2xl outline-none font-bold text-slate-700 text-sm shadow-inner" value={formData.importance} onChange={(e) => setFormData({...formData, importance: e.target.value})}>
-                          <option value="None">None</option>
-                          <option value="!">!</option>
-                          <option value="!!">!!</option>
-                          <option value="!!!">!!!</option>
-                        </select>
-                      </div>
-                    </div>
-                  </div>
-                  <div className="p-6 md:p-8 border-t bg-slate-50/50 flex gap-4 shrink-0">
-                    <button onClick={saveItem} className="flex-1 bg-blue-600 text-white p-4 md:p-5 rounded-2xl font-black text-sm shadow-xl shadow-blue-100 hover:bg-blue-700 transition-all active:scale-95">SAVE CHANGES</button>
-                    {editingItem && (
-                      <button onClick={() => setIsDeleteConfirmOpen(true)} className="px-6 md:px-8 bg-white text-red-500 border-2 border-red-50 rounded-2xl font-black text-sm hover:bg-red-50 transition-colors">DELETE</button>
-                    )}
-                  </div>
-                </div>
-              </div>
-            )}
-          </div>
-        </div>
-      );
-    };
-
-    const root = ReactDOM.createRoot(document.getElementById('root'));
-    root.render(<App />);
-  </script>
+const root = ReactDOM.createRoot(document.getElementById('root'));
+root.render(<App />);
+</script>
 </body>
 </html>
