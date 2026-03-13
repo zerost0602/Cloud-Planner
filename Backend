@@ -136,12 +136,26 @@ function loadData() {
       let obj = {};
       headers.forEach((header, i) => {
         let val = row[i];
+        
+        // 날짜 객체 처리 부분: time 헤더일 경우 시간만 추출하도록 개선
         if (val instanceof Date) {
-          val = (header === 'date') 
-            ? Utilities.formatDate(val, tz, "yyyy-MM-dd")
-            : Utilities.formatDate(val, tz, "yyyy-MM-dd HH:mm:ss");
+          if (header === 'date') {
+            val = Utilities.formatDate(val, tz, "yyyy-MM-dd");
+          } else if (header === 'time') {
+            val = Utilities.formatDate(val, tz, "HH:mm");
+          } else {
+            val = Utilities.formatDate(val, tz, "yyyy-MM-dd HH:mm:ss");
+          }
         }
+        
         if (header === 'id') val = val.toString();
+        
+        // 문자열로 들어온 시간값에 1899년도 찌꺼기가 남아있을 경우 정제
+        if (header === 'time' && typeof val === 'string' && val.includes('1899')) {
+           const match = val.match(/(\d{2}:\d{2})/);
+           if (match) val = match[0];
+        }
+
         obj[header] = val || "";
       });
       return obj;
