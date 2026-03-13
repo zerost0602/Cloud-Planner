@@ -259,7 +259,12 @@
       useEffect(() => {
         if (typeof google !== 'undefined') {
           google.script.run.withSuccessHandler(data => {
-            setItems((data || []).map(it => ({ ...it, date: formatDate(it.date) })));
+            // [수정됨] 클라우드에서 불러올 때 시간 포맷 한번 더 정제
+            setItems((data || []).map(it => ({ 
+              ...it, 
+              date: formatDate(it.date),
+              time: formatTimeOnly(it.time) 
+            })));
             setIsLoading(false);
           }).loadData();
           
@@ -304,8 +309,15 @@
 
       const openEditor = (item = null) => {
         setErrorMsg(""); setIsDeleteConfirmOpen(false);
-        if (item) { setEditingItem(item); setFormData({ ...item }); }
-        else { setEditingItem(null); setFormData({ title: '', date: formatDate(new Date()), time: '', location: '', description: '', type: 'Schedule', importance: 'None', status: '' }); }
+        if (item) { 
+          setEditingItem(item); 
+          // [수정됨] 에디터 모달에 데이터를 넣을 때 시간 포맷 정제
+          setFormData({ ...item, time: formatTimeOnly(item.time) }); 
+        }
+        else { 
+          setEditingItem(null); 
+          setFormData({ title: '', date: formatDate(new Date()), time: '', location: '', description: '', type: 'Schedule', importance: 'None', status: '' }); 
+        }
         setIsEditorOpen(true);
       };
 
