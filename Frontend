@@ -20,7 +20,7 @@
     .donut-chart { transform: rotate(-90deg); }
     .no-scrollbar::-webkit-scrollbar { display: none; }
     .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
-    .calendar-grid-cell { min-height: 60px; }
+    .calendar-grid-cell { min-height: 85px; } /* 모바일 시인성 향상을 위해 최소 높이 증가 */
     @media (min-width: 768px) { .calendar-grid-cell { min-height: 120px; } }
     .schedule-item-monthly { background-color: #2563eb; color: white; transition: all 0.2s ease; }
     .schedule-item-monthly:hover { background-color: #1d4ed8; transform: translateY(-1px); z-index: 10; }
@@ -113,7 +113,7 @@
                     <span className={`text-[10px] md:text-xs font-black px-1.5 py-0.5 rounded w-fit ${isToday ? 'bg-blue-600 text-white shadow-sm' : idx % 7 === 0 ? 'text-red-500' : idx % 7 === 6 ? 'text-blue-500' : 'text-slate-700'}`}>{day}</span>
                     <div className="flex flex-col gap-1 mt-1 overflow-y-auto no-scrollbar">
                       {daySchedules.map(s => (
-                        <div key={s.id} onClick={(e) => { e.stopPropagation(); openEditor(s); }} className="schedule-item-monthly text-[8px] md:text-[10px] px-1.5 py-0.5 rounded truncate font-medium shadow-sm cursor-pointer">
+                        <div key={s.id} onClick={(e) => { e.stopPropagation(); openEditor(s); }} className="schedule-item-monthly text-[9px] md:text-[10px] px-1.5 py-0.5 rounded font-medium shadow-sm cursor-pointer line-clamp-2 md:line-clamp-none md:truncate break-keep leading-tight">
                           {s.importance !== 'None' && <span className="mr-1 text-yellow-300 font-bold">{s.importance}</span>}{s.title}
                         </div>
                       ))}
