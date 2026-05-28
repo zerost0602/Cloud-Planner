@@ -43,29 +43,42 @@ function getSettingsSheet() {
  * 설정값 불러오기
  */
 function getSettings() {
-  const sheet = getSettingsSheet();
-  const data = sheet.getDataRange().getValues();
-  if (data.length <= 1) return { email: Session.getActiveUser().getEmail(), notificationHour: "08" };
-  return {
-    email: data[1][0],
-    notificationHour: data[1][1]
-  };
+  try {
+    const sheet = getSettingsSheet();
+    const data = sheet.getDataRange().getValues();
+    if (data.length <= 1) return { success: true, data: { email: Session.getActiveUser().getEmail(), notificationHour: "08" } };
+    return {
+      success: true,
+      data: {
+        email: data[1][0],
+        notificationHour: data[1][1]
+      }
+    };
+  } catch (e) {
+    console.error("getSettings error: " + e.message);
+    return { success: false, message: e.message };
+  }
 }
 
 /**
  * 설정값 저장 (중복 저장 방지 및 트리거 재설정)
  */
 function saveSettings(settings) {
-  const sheet = getSettingsSheet();
-  const headers = ['email', 'notificationHour', 'updatedAt'];
-  
-  sheet.clear(); 
-  sheet.appendRow(headers);
-  sheet.appendRow([settings.email, settings.notificationHour, new Date()]);
-  sheet.setFrozenRows(1);
-  
-  manageTriggers(parseInt(settings.notificationHour));
-  return "Success";
+  try {
+    const sheet = getSettingsSheet();
+    const headers = ['email', 'notificationHour', 'updatedAt'];
+    
+    sheet.clear(); 
+    sheet.appendRow(headers);
+    sheet.appendRow([settings.email, settings.notificationHour, new Date()]);
+    sheet.setFrozenRows(1);
+    
+    manageTriggers(parseInt(settings.notificationHour));
+    return { success: true };
+  } catch (e) {
+    console.error("saveSettings error: " + e.message);
+    return { success: false, message: e.message };
+  }
 }
 
 /**
@@ -129,10 +142,10 @@ function loadData() {
     const tz = ss.getSpreadsheetTimeZone();
     const sheet = getSheet();
     const values = sheet.getDataRange().getValues();
-    if (values.length <= 1) return [];
+    if (values.length <= 1) return { success: true, data: [] };
     
     const headers = values.shift();
-    return values.map(row => {
+    const data = values.map(row => {
       let obj = {};
       headers.forEach((header, i) => {
         let val = row[i];
@@ -160,9 +173,10 @@ function loadData() {
       });
       return obj;
     });
+    return { success: true, data: data };
   } catch (e) {
     console.error("loadData error: " + e.message);
-    return [];
+    return { success: false, message: e.message };
   }
 }
 
@@ -173,45 +187,50 @@ function loadData() {
  * - 시트를 완전히 비우고 다시 써서 정합성 유지 및 속도 향상
  */
 function saveData(items) {
-  const ss = SpreadsheetApp.getActiveSpreadsheet();
-  const tz = ss.getSpreadsheetTimeZone();
-  const sheet = getSheet();
-  
-  // 1. 저장 시점의 시간은 딱 한 번만 계산 (성능 향상 핵심)
-  const nowStr = Utilities.formatDate(new Date(), tz, "yyyy-MM-dd HH:mm:ss");
-  
-  // 2. 헤더 정의
-  const headers = ['id', 'title', 'date', 'time', 'location', 'description', 'type', 'importance', 'status', 'updatedAt', 'endDate'];
-  
-  // 3. 헤더를 포함한 전체 데이터를 2차원 배열 하나로 준비
-  let dataToWrite = [headers];
+  try {
+    const ss = SpreadsheetApp.getActiveSpreadsheet();
+    const tz = ss.getSpreadsheetTimeZone();
+    const sheet = getSheet();
+    
+    // 1. 저장 시점의 시간은 딱 한 번만 계산 (성능 향상 핵심)
+    const nowStr = Utilities.formatDate(new Date(), tz, "yyyy-MM-dd HH:mm:ss");
+    
+    // 2. 헤더 정의
+    const headers = ['id', 'title', 'date', 'time', 'location', 'description', 'type', 'importance', 'status', 'updatedAt', 'endDate'];
+    
+    // 3. 헤더를 포함한 전체 데이터를 2차원 배열 하나로 준비
+    let dataToWrite = [headers];
 
-  if (items && items.length > 0) {
-    const bodyRows = items.map(item => [
-      item.id || "", 
-      item.title || "", 
-      item.date || "", 
-      item.time || "", 
-      item.location || "", 
-      item.description || "", 
-      item.type || "Schedule", 
-      item.importance || "None", 
-      item.status || "", 
-      nowStr, // 미리 계산해둔 시간 값 사용
-      item.endDate || ""
-    ]);
-    // 헤더 배열 뒤에 데이터 배열 연결
-    dataToWrite = dataToWrite.concat(bodyRows);
+    if (items && items.length > 0) {
+      const bodyRows = items.map(item => [
+        item.id || "", 
+        item.title || "", 
+        item.date || "", 
+        item.time || "", 
+        item.location || "", 
+        item.description || "", 
+        item.type || "Schedule", 
+        item.importance || "None", 
+        item.status || "", 
+        nowStr, // 미리 계산해둔 시간 값 사용
+        item.endDate || ""
+      ]);
+      // 헤더 배열 뒤에 데이터 배열 연결
+      dataToWrite = dataToWrite.concat(bodyRows);
+    }
+    
+    // 4. 시트 전체 초기화 (데이터 꼬임 방지 및 속도 최적화)
+    sheet.clear(); 
+    
+    // 5. 단 한 번의 통신으로 모든 데이터(헤더+본문) 쓰기
+    sheet.getRange(1, 1, dataToWrite.length, headers.length).setValues(dataToWrite);
+    
+    // 6. 편의성을 위해 첫 행(헤더) 고정
+    sheet.setFrozenRows(1);
+
+    return { success: true };
+  } catch (e) {
+    console.error("saveData error: " + e.message);
+    return { success: false, message: e.message };
   }
-  
-  // 4. 시트 전체 초기화 (데이터 꼬임 방지 및 속도 최적화)
-  sheet.clear(); 
-  
-  // 5. 단 한 번의 통신으로 모든 데이터(헤더+본문) 쓰기
-  sheet.getRange(1, 1, dataToWrite.length, headers.length).setValues(dataToWrite);
-  
-  // 6. 편의성을 위해 첫 행(헤더) 고정
-  sheet.setFrozenRows(1);
-
-  return "Success";
 }
