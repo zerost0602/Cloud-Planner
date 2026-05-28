@@ -355,15 +355,35 @@
       useEffect(() => {
         if (typeof google !== 'undefined') {
           google.script.run.withSuccessHandler(res => {
-            if (res && res.success) {
-              setItems((res.data || []).map(it => ({ 
+            let success = false;
+            let data = [];
+            let errorMsg = "알 수 없는 오류";
+
+            if (res) {
+              if (Array.isArray(res)) {
+                success = true;
+                data = res;
+              } else if (typeof res === 'object') {
+                if (res.hasOwnProperty('success')) {
+                  success = res.success;
+                  data = Array.isArray(res.data) ? res.data : [];
+                  errorMsg = res.message || errorMsg;
+                } else {
+                  success = true;
+                  data = [res];
+                }
+              }
+            }
+
+            if (success) {
+              setItems(data.map(it => ({ 
                 ...it, 
                 date: formatDate(it.date),
                 endDate: it.endDate ? formatDate(it.endDate) : formatDate(it.date),
                 time: formatTimeOnly(it.time) 
               })));
             } else {
-              showToast("데이터 로드 실패: " + (res ? res.message : '알 수 없는 오류'), true);
+              showToast("데이터 로드 실패: " + errorMsg, true);
             }
             setIsLoading(false);
           }).withFailureHandler(err => {
@@ -372,7 +392,13 @@
           }).loadData();
           
           google.script.run.withSuccessHandler(res => {
-            if(res && res.success) setSettings(res.data);
+            if (res) {
+              if (res.success && res.data) {
+                setSettings(res.data);
+              } else if (res.email && res.notificationHour) {
+                setSettings(res);
+              }
+            }
           }).getSettings();
         } else {
           // 로컬 데모 모드: localStorage에서 데이터 로드
@@ -441,7 +467,10 @@
           if (typeof google !== 'undefined') {
             google.script.run.withSuccessHandler((res) => {
               setIsSyncing(false);
-              if (!res.success) showToast("동기화 실패: " + res.message, true);
+              const isSuccess = res === "Success" || (res && res.success);
+              if (!isSuccess) {
+                showToast("동기화 실패: " + (res && res.message ? res.message : "알 수 없는 오류"), true);
+              }
             }).withFailureHandler(err => {
               setIsSyncing(false);
               showToast("서버 오류: " + err.message, true);
