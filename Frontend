@@ -102,6 +102,24 @@
       for (let i = 1; i <= totalDaysCount; i++) days.push(i);
       const daysOfWeek = ['SUN', 'MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT'];
 
+      const getEventDuration = (s) => {
+        if (!s.endDate || s.endDate <= s.date) return 1;
+        const d1 = new Date(s.date);
+        const d2 = new Date(s.endDate);
+        return Math.round((d2 - d1) / (1000 * 60 * 60 * 24)) + 1;
+      };
+
+      const sortSchedules = (a, b) => {
+        const durA = getEventDuration(a);
+        const durB = getEventDuration(b);
+        if (durA !== durB) return durB - durA; // longer duration first
+        const impA = getImpScore(a.importance);
+        const impB = getImpScore(b.importance);
+        if (impA !== impB) return impB - impA; // higher importance first
+        if (a.date !== b.date) return a.date.localeCompare(b.date); // earlier start date first
+        return a.id.localeCompare(b.id); // stable id sort
+      };
+
       return (
         <div className="flex-1 p-2 md:p-4 overflow-auto">
           <div className="flex items-center justify-between mb-4 md:mb-6 px-1">
@@ -119,19 +137,56 @@
             {days.map((day, idx) => {
               const dateStr = day ? `${year}-${String(month + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}` : null;
               const isToday = dateStr === todayStr;
-              const daySchedules = items.filter(it => it.date === dateStr && it.type === 'Schedule').sort((a,b) => getImpScore(b.importance) - getImpScore(a.importance));
+              
+              const daySchedules = items.filter(it => {
+                if (it.type !== 'Schedule') return false;
+                const isMulti = it.endDate && it.endDate !== "" && it.endDate !== it.date && it.endDate > it.date;
+                if (!isMulti) {
+                  return it.date === dateStr;
+                }
+                return dateStr >= it.date && dateStr <= it.endDate;
+              }).sort(sortSchedules);
+
               return (
                 <div key={idx} className={`calendar-grid-cell p-1 border-r border-b transition-colors ${isToday ? 'bg-blue-50/50' : 'bg-white'}`} onDoubleClick={() => day && (setCurrentDate(new Date(year, month, day)), setView('weekly'))}>
                   {day && <div className="flex flex-col h-full overflow-hidden">
                     <span className={`text-[10px] md:text-xs font-black px-1.5 py-0.5 rounded w-fit ${isToday ? 'bg-blue-600 text-white shadow-sm' : idx % 7 === 0 ? 'text-red-500' : idx % 7 === 6 ? 'text-blue-500' : 'text-slate-700'}`}>{day}</span>
                     <div className="flex flex-col gap-1 mt-1 overflow-y-auto no-scrollbar">
-                      {daySchedules.map(s => (
-                        <div key={s.id} onClick={(e) => { e.stopPropagation(); openEditor(s); }} className={`schedule-item-monthly text-[8px] md:text-[10px] px-1.5 py-0.5 rounded line-clamp-2 leading-tight whitespace-normal break-words font-medium shadow-sm cursor-pointer ${getCategoryColor(s.category)}`}>
-                          {s.importance !== 'None' && <span className="mr-1 text-red-500 font-bold">{s.importance}</span>}
-                          {s.recurrence && s.recurrence !== 'none' && <i className="fas fa-redo text-[8px] mr-1 opacity-60"></i>}
-                          {s.title}
-                        </div>
-                      ))}
+                      {daySchedules.map(s => {
+                        const isMulti = s.endDate && s.endDate !== "" && s.endDate !== s.date && s.endDate > s.date;
+                        const isStart = !isMulti || dateStr === s.date;
+                        const isEnd = !isMulti || dateStr === s.endDate;
+                        const showTitle = isStart || (idx % 7 === 0);
+
+                        return (
+                          <div 
+                            key={s.id} 
+                            onClick={(e) => { e.stopPropagation(); openEditor(s); }} 
+                            className={`schedule-item-monthly text-[8px] md:text-[10px] py-0.5 px-1.5 leading-tight whitespace-nowrap overflow-hidden text-ellipsis font-medium shadow-sm cursor-pointer ${getCategoryColor(s.category)}`}
+                            style={{
+                              marginLeft: isStart ? '0' : '-5px',
+                              marginRight: isEnd ? '0' : '-5px',
+                              borderTopLeftRadius: isStart ? '0.25rem' : '0',
+                              borderBottomLeftRadius: isStart ? '0.25rem' : '0',
+                              borderTopRightRadius: isEnd ? '0.25rem' : '0',
+                              borderBottomRightRadius: isEnd ? '0.25rem' : '0',
+                              borderLeftWidth: isStart ? '1px' : '0',
+                              borderRightWidth: isEnd ? '1px' : '0',
+                              zIndex: isMulti ? 5 : 1,
+                            }}
+                          >
+                            {showTitle ? (
+                              <>
+                                {s.importance !== 'None' && <span className="mr-1 text-red-500 font-bold">{s.importance}</span>}
+                                {s.recurrence && s.recurrence !== 'none' && <i className="fas fa-redo text-[8px] mr-1 opacity-60"></i>}
+                                {s.title}
+                              </>
+                            ) : (
+                              <span className="opacity-0">&nbsp;</span>
+                            )}
+                          </div>
+                        );
+                      })}
                     </div>
                   </div>}
                 </div>
@@ -161,7 +216,28 @@
           <div className="space-y-4">
             {weekDays.map((d) => {
               const dateStr = formatDate(d);
-              const dayItems = items.filter(it => it.date === dateStr).sort((a, b) => getImpScore(b.importance) - getImpScore(a.importance));
+              const dayItems = [];
+              items.forEach(it => {
+                const isMulti = it.endDate && it.endDate !== "" && it.endDate !== it.date && it.endDate > it.date;
+                if (!isMulti) {
+                  if (it.date === dateStr) {
+                    dayItems.push(it);
+                  }
+                } else {
+                  if (it.date === dateStr) {
+                    dayItems.push({
+                      ...it,
+                      title: `${it.title} 시작일`
+                    });
+                  } else if (it.endDate === dateStr) {
+                    dayItems.push({
+                      ...it,
+                      title: `${it.title} 종료일`
+                    });
+                  }
+                }
+              });
+              dayItems.sort((a, b) => getImpScore(b.importance) - getImpScore(a.importance));
               const dayIdx = d.getDay();
               const isDayToday = dateStr === todayStr;
               return (
@@ -272,7 +348,7 @@
       const todayStr = useMemo(() => formatDate(new Date()), []);
 
       const defaultForm = {
-        title: '', date: formatDate(new Date()), time: '', location: '', description: '', type: 'Schedule', importance: 'None', status: '', category: 'None', recurrence: 'none'
+        title: '', date: formatDate(new Date()), endDate: formatDate(new Date()), time: '', location: '', description: '', type: 'Schedule', importance: 'None', status: '', category: 'None', recurrence: 'none'
       };
       const [formData, setFormData] = useState(defaultForm);
 
@@ -283,6 +359,7 @@
               setItems((res.data || []).map(it => ({ 
                 ...it, 
                 date: formatDate(it.date),
+                endDate: it.endDate ? formatDate(it.endDate) : formatDate(it.date),
                 time: formatTimeOnly(it.time) 
               })));
             } else {
@@ -298,6 +375,51 @@
             if(res && res.success) setSettings(res.data);
           }).getSettings();
         } else {
+          // 로컬 데모 모드: localStorage에서 데이터 로드
+          const localData = localStorage.getItem('planner_items');
+          if (localData) {
+            try {
+              setItems(JSON.parse(localData));
+            } catch (e) {
+              console.error(e);
+            }
+          } else {
+            // 데모용 샘플 데이터 추가
+            const sampleData = [
+              {
+                id: "demo1",
+                title: "프로젝트 기획 회의",
+                date: formatDate(new Date()),
+                endDate: formatDate(new Date(Date.now() + 2 * 24 * 60 * 60 * 1000)), // 3일 일정
+                time: "10:00",
+                location: "회의실 A",
+                description: "신규 기능 기획 및 일정 조율",
+                type: "Schedule",
+                importance: "!!",
+                status: "",
+                category: "Work"
+              },
+              {
+                id: "demo2",
+                title: "피트니스 운동",
+                date: formatDate(new Date()),
+                endDate: formatDate(new Date()),
+                time: "19:00",
+                location: "헬스장",
+                description: "유산소 및 근력 운동",
+                type: "Schedule",
+                importance: "None",
+                status: "",
+                category: "Exercise"
+              }
+            ];
+            setItems(sampleData);
+            localStorage.setItem('planner_items', JSON.stringify(sampleData));
+          }
+          const localSettings = localStorage.getItem('planner_settings');
+          if (localSettings) {
+            try { setSettings(JSON.parse(localSettings)); } catch(e){}
+          }
           setIsLoading(false);
         }
       }, []);
@@ -325,7 +447,8 @@
               showToast("서버 오류: " + err.message, true);
             }).saveData(physicalItems);
           } else {
-            setTimeout(() => { setIsSyncing(false); }, 800);
+            localStorage.setItem('planner_items', JSON.stringify(physicalItems));
+            setTimeout(() => { setIsSyncing(false); showToast("로컬 브라우저에 저장됨"); }, 800);
           }
         }, 1000);
       };
@@ -381,7 +504,7 @@
         setErrorMsg(""); setIsDeleteConfirmOpen(false);
         if (item) { 
           setEditingItem(item); 
-          setFormData({ ...item, time: formatTimeOnly(item.time) }); 
+          setFormData({ ...item, endDate: item.endDate || item.date, time: formatTimeOnly(item.time) }); 
         } else { 
           setEditingItem(null); 
           setFormData(defaultForm); 
@@ -391,19 +514,23 @@
 
       const saveItem = () => {
         if (!formData.title || !formData.date) { setErrorMsg("Title과 Date는 필수 입력 항목입니다."); return; }
+        const actualEndDate = formData.endDate || formData.date;
+        if (actualEndDate < formData.date) { setErrorMsg("종료일은 시작일보다 빠를 수 없습니다."); return; }
         if (formData.time && !/^([01]\d|2[0-3]):([0-5]\d)$/.test(formData.time)) { setErrorMsg("시간 형식이 올바르지 않습니다 (HH:mm)."); return; }
+        
+        const finalFormData = { ...formData, endDate: actualEndDate };
         
         let newItems;
         if (editingItem) {
           if (editingItem.isVirtual) {
             // 가상 아이템을 수정할 경우 새로운 물리 항목 생성
-            newItems = [...items, { ...formData, id: editingItem.id, isVirtual: false }];
+            newItems = [...items, { ...finalFormData, id: editingItem.id, isVirtual: false }];
           } else {
             // 원본 수정
-            newItems = items.map(it => it.id === editingItem.id ? { ...formData, id: it.id, isVirtual: false } : it);
+            newItems = items.map(it => it.id === editingItem.id ? { ...finalFormData, id: it.id, isVirtual: false } : it);
           }
         } else {
-          newItems = [...items, { ...formData, id: Date.now().toString(), isVirtual: false }];
+          newItems = [...items, { ...finalFormData, id: Date.now().toString(), isVirtual: false }];
         }
         
         updateAndSync(newItems);
@@ -621,14 +748,18 @@
                       <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest block mb-2 px-1">Title *</label>
                       <input className="w-full p-3 md:p-4 bg-slate-100 border-2 border-transparent rounded-xl md:rounded-2xl focus:bg-white focus:border-blue-500 outline-none font-bold text-slate-700 text-sm md:text-base transition-all shadow-inner" placeholder="What's the plan?" value={formData.title} onChange={e => { setErrorMsg(""); setFormData({...formData, title: e.target.value}); }} />
                     </div>
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4 md:gap-6">
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-4 md:gap-6">
                       <div>
-                        <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest block mb-2 px-1">Date *</label>
-                        <input type="date" className="w-full p-3 md:p-4 bg-slate-100 border-2 border-transparent rounded-xl md:rounded-2xl outline-none font-bold text-slate-700 text-sm shadow-inner" value={formData.date} onChange={e => setFormData({...formData, date: e.target.value})} disabled={editingItem && editingItem.isVirtual} />
+                        <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest block mb-2 px-1">시작일 *</label>
+                        <input type="date" className="w-full p-3 md:p-4 bg-slate-100 border-2 border-transparent rounded-xl md:rounded-2xl outline-none font-bold text-slate-700 text-xs md:text-sm shadow-inner" value={formData.date} onChange={e => setFormData({...formData, date: e.target.value, endDate: formData.endDate && formData.endDate >= e.target.value ? formData.endDate : e.target.value})} disabled={editingItem && editingItem.isVirtual} />
+                      </div>
+                      <div>
+                        <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest block mb-2 px-1">종료일</label>
+                        <input type="date" className="w-full p-3 md:p-4 bg-slate-100 border-2 border-transparent rounded-xl md:rounded-2xl outline-none font-bold text-slate-700 text-xs md:text-sm shadow-inner" value={formData.endDate || ""} onChange={e => setFormData({...formData, endDate: e.target.value})} disabled={editingItem && editingItem.isVirtual} />
                       </div>
                       <div>
                         <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest block mb-2 px-1">Time (HH:mm)</label>
-                        <input type="text" className="w-full p-3 md:p-4 bg-slate-100 border-2 border-transparent rounded-xl md:rounded-2xl outline-none font-bold text-slate-700 text-sm shadow-inner" placeholder="HH:mm" value={formData.time} onChange={e => setFormData({...formData, time: e.target.value})} />
+                        <input type="text" className="w-full p-3 md:p-4 bg-slate-100 border-2 border-transparent rounded-xl md:rounded-2xl outline-none font-bold text-slate-700 text-xs md:text-sm shadow-inner" placeholder="HH:mm" value={formData.time} onChange={e => setFormData({...formData, time: e.target.value})} />
                       </div>
                     </div>
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-4 md:gap-6">
