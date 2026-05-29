@@ -73,6 +73,40 @@
       return 0;
     };
 
+    const parseDateStr = (dateStr) => {
+      if (!dateStr) return null;
+      const parts = dateStr.split('-');
+      if (parts.length !== 3) return new Date(dateStr);
+      return new Date(parseInt(parts[0]), parseInt(parts[1]) - 1, parseInt(parts[2]));
+    };
+
+    const hasSchedulesInWeek = (dateStr, items) => {
+      const targetDate = parseDateStr(dateStr);
+      if (!targetDate) return false;
+      const dayOfWeek = targetDate.getDay();
+      
+      const diffToMonday = targetDate.getDate() - dayOfWeek + (dayOfWeek === 0 ? -6 : 1);
+      const monday = new Date(targetDate);
+      monday.setDate(diffToMonday);
+      monday.setHours(0, 0, 0, 0);
+      
+      const sunday = new Date(monday);
+      sunday.setDate(monday.getDate() + 6);
+      sunday.setHours(23, 59, 59, 999);
+      
+      return items.some(it => {
+        if (it.type !== 'Schedule' || it.status === 'DELETED') return false;
+        const itemDate = parseDateStr(it.date);
+        if (!itemDate) return false;
+        itemDate.setHours(0, 0, 0, 0);
+        
+        const itemEndDate = it.endDate ? parseDateStr(it.endDate) : itemDate;
+        if (itemEndDate) itemEndDate.setHours(23, 59, 59, 999);
+        
+        return (itemDate <= sunday && itemEndDate >= monday);
+      });
+    };
+
     const getCategoryColor = (cat) => {
       switch (cat) {
         case 'Work': return 'bg-blue-100 text-blue-800 border border-blue-200';
@@ -92,7 +126,7 @@
     };
 
     // --- 개별 뷰 컴포넌트 ---
-    const MonthlyView = ({ items, currentDate, setCurrentDate, setView, openEditor, todayStr }) => {
+    const MonthlyView = ({ items, currentDate, setCurrentDate, setView, openEditor, todayStr, setViewingDate }) => {
       const year = currentDate.getFullYear();
       const month = currentDate.getMonth();
       const days = [];
@@ -147,8 +181,26 @@
                 return dateStr >= it.date && dateStr <= it.endDate;
               }).sort(sortSchedules);
 
+              const hasSchedules = daySchedules.length > 0;
+
               return (
-                <div key={idx} className={`calendar-grid-cell p-1 border-r border-b transition-colors ${isToday ? 'bg-blue-50/50' : 'bg-white'}`} onDoubleClick={() => day && (setCurrentDate(new Date(year, month, day)), setView('weekly'))}>
+                <div 
+                  key={idx} 
+                  className={`calendar-grid-cell p-1 border-r border-b transition-colors ${day && hasSchedules ? 'cursor-pointer' : ''} ${isToday ? 'bg-blue-50/50' : 'bg-white'}`}
+                  onClick={() => {
+                    if (day && hasSchedules) {
+                      setViewingDate(dateStr);
+                    }
+                  }}
+                  onDoubleClick={(e) => {
+                    if (!day) return;
+                    e.stopPropagation();
+                    if (!hasSchedules && !hasSchedulesInWeek(dateStr, items)) {
+                      setCurrentDate(parseDateStr(dateStr));
+                      setView('weekly');
+                    }
+                  }}
+                >
                   {day && <div className="flex flex-col h-full overflow-hidden">
                     <span className={`text-[10px] md:text-xs font-black px-1.5 py-0.5 rounded w-fit ${isToday ? 'bg-blue-600 text-white shadow-sm' : idx % 7 === 0 ? 'text-red-500' : idx % 7 === 6 ? 'text-blue-500' : 'text-slate-700'}`}>{day}</span>
                     <div className="flex flex-col gap-1 mt-1 overflow-y-auto no-scrollbar">
@@ -161,7 +213,10 @@
                         return (
                           <div 
                             key={s.id} 
-                            onClick={(e) => { e.stopPropagation(); openEditor(s); }} 
+                            onClick={(e) => { 
+                              e.stopPropagation(); 
+                              setViewingDate(dateStr); 
+                            }} 
                             className={`schedule-item-monthly text-[8px] md:text-[10px] py-0.5 px-1.5 leading-tight whitespace-nowrap overflow-hidden text-ellipsis font-medium shadow-sm cursor-pointer ${getCategoryColor(s.category)}`}
                             style={{
                               marginLeft: isStart ? '0' : '-5px',
@@ -337,6 +392,7 @@
       const [isLoading, setIsLoading] = useState(true);
       const [isSyncing, setIsSyncing] = useState(false);
       const [editingItem, setEditingItem] = useState(null);
+      const [viewingDate, setViewingDate] = useState(null);
       
       const [errorMsg, setErrorMsg] = useState("");
       const [toastData, setToastData] = useState(null);
@@ -710,7 +766,7 @@
             </header>
 
             <main className="flex-1 flex flex-col overflow-hidden">
-              {view === 'monthly' && <MonthlyView items={visibleDisplayItems} currentDate={currentDate} setCurrentDate={setCurrentDate} setView={setView} openEditor={openEditor} todayStr={todayStr} />}
+              {view === 'monthly' && <MonthlyView items={visibleDisplayItems} currentDate={currentDate} setCurrentDate={setCurrentDate} setView={setView} openEditor={openEditor} todayStr={todayStr} setViewingDate={setViewingDate} />}
               {view === 'weekly' && <WeeklyView items={visibleDisplayItems} currentDate={currentDate} setCurrentDate={setCurrentDate} toggleHabitStatus={toggleHabitStatus} openEditor={openEditor} todayStr={todayStr} />}
               {view === 'achievement' && <AchievementView items={visibleDisplayItems} currentDate={currentDate} />}
             </main>
@@ -843,6 +899,74 @@
                     {editingItem && (
                       <button onClick={() => setIsDeleteConfirmOpen(true)} className="px-6 md:px-8 bg-white text-red-500 border-2 border-red-50 rounded-2xl font-black text-sm hover:bg-red-50 transition-colors">DELETE</button>
                     )}
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* 일별 일정 목록 모달 */}
+            {viewingDate && (
+              <div className="fixed inset-0 bg-slate-900/60 flex items-center justify-center z-[140] p-4 backdrop-blur-md animate-in fade-in duration-200">
+                <div className="bg-white w-full max-w-md rounded-3xl shadow-2xl overflow-hidden flex flex-col border border-white/20">
+                  <div className="p-6 md:p-8 border-b flex justify-between items-center bg-slate-50/50">
+                    <div>
+                      <h3 className="text-xl md:text-2xl font-black text-slate-800 tracking-tight">{viewingDate} 일정</h3>
+                      <p className="text-[10px] text-slate-400 font-bold uppercase tracking-widest mt-1">Schedules List</p>
+                    </div>
+                    <button onClick={() => setViewingDate(null)} className="w-10 h-10 flex items-center justify-center rounded-full bg-slate-100 text-slate-400 hover:text-red-500 transition-all"><i className="fas fa-times"></i></button>
+                  </div>
+                  <div className="p-6 md:p-8 space-y-4 max-h-[50vh] overflow-y-auto no-scrollbar">
+                    {items.filter(it => {
+                      if (it.type !== 'Schedule' || it.status === 'DELETED') return false;
+                      const isMulti = it.endDate && it.endDate !== "" && it.endDate !== it.date && it.endDate > it.date;
+                      if (!isMulti) {
+                        return it.date === viewingDate;
+                      }
+                      return viewingDate >= it.date && viewingDate <= it.endDate;
+                    }).sort((a, b) => getImpScore(b.importance) - getImpScore(a.importance)).map(s => (
+                      <div 
+                        key={s.id} 
+                        onClick={() => {
+                          setViewingDate(null);
+                          openEditor(s);
+                        }}
+                        className="flex items-center gap-3 p-3.5 rounded-2xl hover:bg-slate-50 cursor-pointer shadow-sm border border-slate-100 transition-all hover:scale-[1.01]"
+                      >
+                        <div className={`w-1.5 h-10 rounded-full ${getCategoryBadge(s.category)} shrink-0`}></div>
+                        <div className="flex flex-col flex-1 min-w-0">
+                          <span className="font-bold text-slate-800 text-sm md:text-base truncate">
+                            {s.recurrence && s.recurrence !== 'none' && <i className="fas fa-redo text-[10px] text-slate-400 mr-2"></i>}
+                            {s.title}
+                          </span>
+                          <div className="flex flex-wrap gap-2 items-center mt-1">
+                            {s.time && <span className="text-[10px] text-slate-400 font-medium"><i className="far fa-clock mr-1"></i>{formatTimeOnly(s.time)}</span>}
+                            {s.location && <span className="text-[10px] text-blue-400 font-bold truncate max-w-[120px]"><i className="fas fa-map-marker-alt mr-1"></i>{s.location}</span>}
+                            {s.category && s.category !== 'None' && <span className={`text-[8px] px-1.5 py-0.5 rounded font-bold uppercase ${getCategoryColor(s.category)}`}>{s.category}</span>}
+                            {s.importance !== 'None' && <span className="text-[10px] text-red-500 font-bold">{s.importance}</span>}
+                          </div>
+                          {s.description && (
+                            <p className="text-[11px] text-slate-400 mt-1 truncate">{s.description}</p>
+                          )}
+                        </div>
+                        <i className="fas fa-chevron-right text-slate-300 text-xs"></i>
+                      </div>
+                    ))}
+                  </div>
+                  <div className="p-6 md:p-8 border-t bg-slate-50/50 flex gap-4 shrink-0">
+                    <button 
+                      onClick={() => {
+                        const defaultDate = viewingDate;
+                        setViewingDate(null);
+                        openEditor({
+                          ...defaultForm,
+                          date: defaultDate,
+                          endDate: defaultDate
+                        });
+                      }} 
+                      className="w-full bg-blue-600 text-white p-4 rounded-2xl font-black text-sm shadow-xl shadow-blue-100 hover:bg-blue-700 transition-all active:scale-95 text-center"
+                    >
+                      <i className="fas fa-plus mr-2"></i> 새 일정 추가
+                    </button>
                   </div>
                 </div>
               </div>
