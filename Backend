@@ -15,7 +15,7 @@ function doGet() {
 function getSheet() {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
   let sheet = ss.getSheetByName('Schedules');
-  const headers = ['id', 'title', 'date', 'time', 'location', 'description', 'type', 'importance', 'status', 'updatedAt', 'endDate'];
+  const headers = ['id', 'title', 'date', 'time', 'location', 'description', 'type', 'importance', 'status', 'updatedAt', 'endDate', 'category'];
   
   if (!sheet) {
     sheet = ss.insertSheet('Schedules');
@@ -196,7 +196,7 @@ function saveData(items) {
     const nowStr = Utilities.formatDate(new Date(), tz, "yyyy-MM-dd HH:mm:ss");
     
     // 2. 헤더 정의
-    const headers = ['id', 'title', 'date', 'time', 'location', 'description', 'type', 'importance', 'status', 'updatedAt', 'endDate'];
+    const headers = ['id', 'title', 'date', 'time', 'location', 'description', 'type', 'importance', 'status', 'updatedAt', 'endDate', 'category'];
     
     // 3. 헤더를 포함한 전체 데이터를 2차원 배열 하나로 준비
     let dataToWrite = [headers];
@@ -213,7 +213,8 @@ function saveData(items) {
         item.importance || "None", 
         item.status || "", 
         nowStr, // 미리 계산해둔 시간 값 사용
-        item.endDate || ""
+        item.endDate || "",
+        item.category || "None"
       ]);
       // 헤더 배열 뒤에 데이터 배열 연결
       dataToWrite = dataToWrite.concat(bodyRows);
