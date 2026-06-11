@@ -33,25 +33,42 @@ function getSettingsSheet() {
   let sheet = ss.getSheetByName('Settings');
   if (!sheet) {
     sheet = ss.insertSheet('Settings');
-    sheet.appendRow(['email', 'notificationHour', 'updatedAt']);
+    sheet.appendRow(['botToken', 'chatId', 'notificationHour', 'updatedAt']);
     sheet.setFrozenRows(1);
   }
   return sheet;
 }
 
 /**
- * 설정값 불러오기
+ * 설정값 불러오기 (하위 호환성 유지)
  */
 function getSettings() {
   try {
     const sheet = getSettingsSheet();
     const data = sheet.getDataRange().getValues();
-    if (data.length <= 1) return { success: true, data: { email: Session.getActiveUser().getEmail(), notificationHour: "08" } };
+    if (data.length <= 1) {
+      return { success: true, data: { botToken: "", chatId: "", notificationHour: "08" } };
+    }
+    
+    const headers = data[0];
+    const botTokenIndex = headers.indexOf('botToken');
+    const chatIdIndex = headers.indexOf('chatId');
+    const hourIndex = headers.indexOf('notificationHour');
+    
+    let botToken = "";
+    let chatId = "";
+    let notificationHour = "08";
+    
+    if (botTokenIndex !== -1 && data.length > 1) botToken = data[1][botTokenIndex];
+    if (chatIdIndex !== -1 && data.length > 1) chatId = data[1][chatIdIndex];
+    if (hourIndex !== -1 && data.length > 1) notificationHour = data[1][hourIndex];
+    
     return {
       success: true,
       data: {
-        email: data[1][0],
-        notificationHour: data[1][1]
+        botToken: botToken,
+        chatId: chatId,
+        notificationHour: notificationHour
       }
     };
   } catch (e) {
@@ -66,11 +83,11 @@ function getSettings() {
 function saveSettings(settings) {
   try {
     const sheet = getSettingsSheet();
-    const headers = ['email', 'notificationHour', 'updatedAt'];
+    const headers = ['botToken', 'chatId', 'notificationHour', 'updatedAt'];
     
     sheet.clear(); 
     sheet.appendRow(headers);
-    sheet.appendRow([settings.email, settings.notificationHour, new Date()]);
+    sheet.appendRow([settings.botToken, settings.chatId, settings.notificationHour, new Date()]);
     sheet.setFrozenRows(1);
     
     manageTriggers(parseInt(settings.notificationHour));
@@ -102,35 +119,78 @@ function manageTriggers(hour) {
 }
 
 /**
- * 매일 일정 메일 발송 로직 (Schedule과 Habit 모두 포함)
+ * 텔레그램 메시지 API 전송 헬퍼
+ */
+function sendTelegramMessage(botToken, chatId, text) {
+  const url = 'https://api.telegram.org/bot' + botToken + '/sendMessage';
+  const payload = {
+    chat_id: chatId,
+    text: text,
+    parse_mode: 'HTML'
+  };
+  const options = {
+    method: 'post',
+    contentType: 'application/json',
+    payload: JSON.stringify(payload),
+    muteHttpExceptions: true
+  };
+  const response = UrlFetchApp.fetch(url, options);
+  const responseData = JSON.parse(response.getContentText());
+  if (!responseData.ok) {
+    throw new Error(responseData.description || "Telegram API Error");
+  }
+  return responseData;
+}
+
+/**
+ * 텔레그램 연동 테스트 전송
+ */
+function testTelegram(botToken, chatId) {
+  try {
+    const testMessage = `🤖 <b>[PLANNER]</b> 텔레그램 알림 연동 테스트에 성공했습니다!`;
+    sendTelegramMessage(botToken, chatId, testMessage);
+    return { success: true };
+  } catch (e) {
+    console.error("testTelegram error: " + e.message);
+    return { success: false, message: e.message };
+  }
+}
+
+/**
+ * 매일 일정 텔레그램 알림 발송 로직 (Schedule과 Habit 모두 포함)
  */
 function sendDailyNotification() {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
   const tz = ss.getSpreadsheetTimeZone(); // 스프레드시트 시간대 사용
-  const settings = getSettings();
+  const settingsRes = getSettings();
   
-  if (!settings.email) return;
+  if (!settingsRes.success || !settingsRes.data) return;
+  const settings = settingsRes.data;
+  
+  if (!settings.botToken || !settings.chatId) return;
   
   const todayStr = Utilities.formatDate(new Date(), tz, "yyyy-MM-dd");
-  const items = loadData();
+  const dataRes = loadData();
   
-  // 오늘 날짜이고 Schedule 또는 Habit인 항목 필터링
-  const todayItems = items.filter(it => it.date === todayStr && (it.type === 'Schedule' || it.type === 'Habit'));
+  if (!dataRes.success || !dataRes.data) return;
+  const items = dataRes.data;
+  
+  // 오늘 날짜이고 Schedule 또는 Habit인 항목 필터링 (삭제되지 않은 항목만)
+  const todayItems = items.filter(it => it.date === todayStr && (it.type === 'Schedule' || it.type === 'Habit') && it.status !== 'DELETED');
   
   if (todayItems.length === 0) return; 
   
   const body = todayItems.map(s => {
-    const typeLabel = s.type === 'Habit' ? '[습관]' : '[일정]';
-    const timePart = s.time ? ` [${s.time}]` : "";
-    const locPart = s.location ? ` @${s.location}` : "";
-    const importance = s.importance && s.importance !== 'None' ? ` (${s.importance})` : "";
-    return `- ${typeLabel}${importance} ${s.title}${timePart}${locPart}`;
+    const typeEmoji = s.type === 'Habit' ? '⏰' : '📅';
+    const timePart = s.time ? ` 🕒 <b>${s.time}</b>` : "";
+    const locPart = s.location ? ` 📍 <i>${s.location}</i>` : "";
+    const importance = s.importance && s.importance !== 'None' ? ` ⚠️ <b>${s.importance}</b>` : "";
+    return `${typeEmoji} <b>${s.title}</b>${timePart}${locPart}${importance}`;
   }).join('\n');
   
-  const subject = `[PLANNER] ${todayStr} 오늘의 할 일 알림`;
-  const message = `안녕하세요,\n\n오늘(${todayStr}) 예정된 리스트입니다:\n\n${body}\n\n오늘도 좋은 하루 되세요!`;
+  const message = `🔔 <b>오늘의 일정 알림 (${todayStr})</b>\n\n오늘 예정된 리스트입니다:\n\n${body}\n\n오늘도 좋은 하루 보내세요! 💪`;
   
-  GmailApp.sendEmail(settings.email, subject, message);
+  sendTelegramMessage(settings.botToken, settings.chatId, message);
 }
 
 /**
