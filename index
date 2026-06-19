@@ -1,1851 +1,1198 @@
 <!DOCTYPE html>
 <html lang="ko">
 <head>
-<meta charset="UTF-8">
-<script>
-  (function() {
-    var logError = function(message, source, lineno, colno, error) {
-      var errDiv = document.getElementById('debug-error-box');
-      if (!errDiv) {
-        errDiv = document.createElement('div');
-        errDiv.id = 'debug-error-box';
-        errDiv.style.position = 'fixed';
-        errDiv.style.top = '0';
-        errDiv.style.left = '0';
-        errDiv.style.width = '100%';
-        errDiv.style.height = '100%';
-        errDiv.style.backgroundColor = '#fee2e2';
-        errDiv.style.color = '#991b1b';
-        errDiv.style.padding = '24px';
-        errDiv.style.fontFamily = 'monospace';
-        errDiv.style.zIndex = '99999';
-        errDiv.style.overflow = 'auto';
-        document.body.appendChild(errDiv);
-      }
-      errDiv.innerHTML = '<h1 style="font-size: 20px; font-weight: bold; margin-bottom: 16px;">Error Detected</h1>' +
-        '<p style="font-weight: bold; margin-bottom: 8px;">' + message + '</p>' +
-        (source ? '<p style="margin-bottom: 8px;">Source: ' + source + ' | Line: ' + lineno + '</p>' : '') +
-        (error && error.stack ? '<pre style="background: white; padding: 16px; border-radius: 8px; border: 1px solid #fca5a5; overflow: auto; max-height: 70vh;">' + error.stack + '</pre>' : '');
-    };
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>일정관리 시스템</title>
+  <!-- React 및 필수 라이브러리를 UMD 스크립트로 로드하여 모바일 및 iframe 호환성 확보 (CORS 제한 방지를 위해 crossorigin 제거) -->
+  <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+  <script src="https://unpkg.com/htm@3.1.1/dist/htm.js"></script>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+  <style>
+    @keyframes pulse-orange {
+      0% { background-color: #fb923c; box-shadow: 0 0 0 0 rgba(251, 146, 60, 0.7); }
+      70% { background-color: #f97316; box-shadow: 0 0 0 10px rgba(251, 146, 60, 0); }
+      100% { background-color: #fb923c; box-shadow: 0 0 0 0 rgba(251, 146, 60, 0); }
+    }
+    .btn-sync-dirty { animation: pulse-orange 2s infinite; color: white !important; }
+    .donut-chart { transform: rotate(-90deg); }
+    .no-scrollbar::-webkit-scrollbar { display: none; }
+    .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+    .calendar-grid-cell { min-height: 80px; }
+    @media (min-width: 768px) { .calendar-grid-cell { min-height: 120px; } }
+    .schedule-item-monthly { transition: all 0.2s ease; }
+    .schedule-item-monthly:hover { filter: brightness(0.9); transform: translateY(-1px); z-index: 10; }
+    .shake { animation: shake 0.5s cubic-bezier(.36,.07,.19,.97) both; }
+    @keyframes shake {
+      10%, 90% { transform: translate3d(-1px, 0, 0); }
+      20%, 80% { transform: translate3d(2px, 0, 0); }
+      30%, 50%, 70% { transform: translate3d(-4px, 0, 0); }
+      40%, 60% { transform: translate3d(4px, 0, 0); }
+    }
+    .toast-up { animation: toastUp 0.4s ease-out forwards; }
+    @keyframes toastUp { from { transform: translateY(100px); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
+  </style>
+</head>
+<body class="bg-slate-50 text-slate-900 overflow-hidden">
+  <div id="root"></div>
 
+  <script>
+    // 모바일 브라우저 런타임 에러 화면 표시용 핸들러 (디버깅 완료 후 제거 예정)
     window.onerror = function(message, source, lineno, colno, error) {
-      logError(message, source, lineno, colno, error);
+      const div = document.createElement('div');
+      div.style.position = 'fixed';
+      div.style.top = '0';
+      div.style.left = '0';
+      div.style.width = '100%';
+      div.style.background = '#ef4444';
+      div.style.color = '#ffffff';
+      div.style.zIndex = '99999';
+      div.style.padding = '16px';
+      div.style.fontSize = '12px';
+      div.style.fontWeight = 'bold';
+      div.style.lineHeight = '1.5';
+      div.style.wordBreak = 'break-all';
+      div.style.boxShadow = '0 10px 15px -3px rgba(0,0,0,0.3)';
+      div.innerHTML = '⚠️ Mobile Runtime Error:<br/>' + message + '<br/>File: ' + source + '<br/>Line: ' + lineno + ':' + colno;
+      document.body.appendChild(div);
       return false;
     };
 
-    var originalConsoleError = console.error;
-    console.error = function() {
-      originalConsoleError.apply(console, arguments);
-      var args = Array.prototype.slice.call(arguments);
-      var msg = args.map(function(arg) {
-        return typeof arg === 'object' ? JSON.stringify(arg) : String(arg);
-      }).join(' ');
-      logError('Console Error: ' + msg);
+    const { useState, useEffect, useMemo, useCallback, useRef } = React;
+
+    const html = htm.bind(React.createElement);
+
+    // --- 유틸리티 함수 ---
+    const formatDate = (date) => {
+      const d = new Date(date);
+      if (isNaN(d.getTime())) return "";
+      let month = '' + (d.getMonth() + 1);
+      let day = '' + d.getDate();
+      let year = d.getFullYear();
+      if (month.length < 2) month = '0' + month;
+      if (day.length < 2) day = '0' + day;
+      return [year, month, day].join('-');
     };
-  })();
-</script>
-<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-<title>DoubleBook - GAS 통합 가계부</title>
-<script src="https://cdn.tailwindcss.com"></script>
-<script src="https://unpkg.com/lucide@latest"></script>
-<link href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard/dist/web/static/pretendard.css" rel="stylesheet">
-<style>
-  body { font-family: 'Pretendard', sans-serif; }
-  input[type="number"]::-webkit-inner-spin-button,
-  input[type="number"]::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
-  input[type="number"] { -moz-appearance: textfield; }
-  .loading-overlay { background: rgba(255, 255, 255, 0.9); position: fixed; inset: 0; z-index: 9999; display: flex; align-items: center; justify-content: center; flex-direction: column; }
-  .modal-scroll::-webkit-scrollbar { width: 4px; }
-  .modal-scroll::-webkit-scrollbar-thumb { background-color: #cbd5e1; border-radius: 10px; }
-  .sidebar-transition { transition: width 0.3s cubic-bezier(0.4, 0, 0.2, 1); }
-  button, input, select { touch-action: manipulation; }
-</style>
-</head>
-<body class="bg-slate-50 text-slate-900 overflow-x-hidden font-sans">
-<div id="root"></div>
 
-<script type="module">
-import React, { useState, useEffect, useMemo, useCallback } from 'https://esm.sh/react@18.2.0';
-import ReactDOM from 'https://esm.sh/react-dom@18.2.0/client';
-import htm from 'https://esm.sh/htm@3.1.1';
+    const formatTimeOnly = (timeVal) => {
+      if (!timeVal) return "";
+      if (typeof timeVal === 'string') {
+        const match = timeVal.match(/(\d{2}:\d{2})/);
+        return match ? match[0] : timeVal;
+      }
+      const d = new Date(timeVal);
+      if (!isNaN(d.getTime())) return d.toTimeString().slice(0, 5);
+      return timeVal;
+    };
 
-const html = htm.bind(React.createElement);
+    const getDaysInMonth = (year, month) => new Date(year, month + 1, 0).getDate();
+    const getFirstDayOfMonth = (year, month) => new Date(year, month, 1).getDay();
+    const getImpScore = (imp) => {
+      if (imp === '!!!') return 3;
+      if (imp === '!!') return 2;
+      if (imp === '!') return 1;
+      return 0;
+    };
 
-const TrashIcon = () => html`
-<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 6h18m-2 0v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6m3 0V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"></path><line x1="10" y1="11" x2="10" y2="17"></line><line x1="14" y1="11" x2="14" y2="17"></line></svg>
-`;
+    const parseDateStr = (dateStr) => {
+      if (!dateStr) return null;
+      const parts = dateStr.split('-');
+      if (parts.length !== 3) return new Date(dateStr);
+      return new Date(parseInt(parts[0]), parseInt(parts[1]) - 1, parseInt(parts[2]));
+    };
 
-// --- 공통 아토믹 컴포넌트 ---
-const Button = ({ children, variant = 'primary', className = '', ...props }) => {
-  const base = "flex items-center justify-center gap-2 px-4 py-2 rounded-xl font-bold transition-all active:scale-95 shadow-sm text-sm";
-  const variants = {
-    primary: "bg-indigo-600 hover:bg-indigo-700 text-white",
-    secondary: "bg-slate-100 hover:bg-slate-200 text-slate-600 border border-slate-200",
-    danger: "bg-red-50 hover:bg-red-500 text-red-500 hover:text-white border border-red-100",
-    ghost: "bg-transparent hover:bg-slate-100 text-slate-600 shadow-none"
-  };
-  return html`<button className="${base} ${variants[variant]} ${className}" ...${props}>${children}</button>`;
-};
+    const hasSchedulesInWeek = (dateStr, items) => {
+      const targetDate = parseDateStr(dateStr);
+      if (!targetDate) return false;
+      const dayOfWeek = targetDate.getDay();
+      
+      const diffToMonday = targetDate.getDate() - dayOfWeek + (dayOfWeek === 0 ? -6 : 1);
+      const monday = new Date(targetDate);
+      monday.setDate(diffToMonday);
+      monday.setHours(0, 0, 0, 0);
+      
+      const sunday = new Date(monday);
+      sunday.setDate(monday.getDate() + 6);
+      sunday.setHours(23, 59, 59, 999);
+      
+      return items.some(it => {
+        if (it.type !== 'Schedule' || it.status === 'DELETED') return false;
+        const itemDate = parseDateStr(it.date);
+        if (!itemDate) return false;
+        itemDate.setHours(0, 0, 0, 0);
+        
+        const itemEndDate = it.endDate ? parseDateStr(it.endDate) : itemDate;
+        if (itemEndDate) itemEndDate.setHours(23, 59, 59, 999);
+        
+        return (itemDate <= sunday && itemEndDate >= monday);
+      });
+    };
 
-const Input = ({ className = '', ...props }) => html`
-  <input className="w-full p-2.5 rounded-xl border border-slate-200 outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100 transition-all text-sm font-bold text-slate-700 bg-white placeholder:text-slate-300 ${className}" ...${props} />
-`;
+    const getCategoryColor = (cat) => {
+      switch (cat) {
+        case 'Work': return 'bg-blue-100 text-blue-800 border border-blue-200';
+        case 'Personal': return 'bg-emerald-100 text-emerald-800 border border-emerald-200';
+        case 'Exercise': return 'bg-orange-100 text-orange-800 border border-orange-200';
+        default: return 'bg-slate-700 text-white border border-slate-600';
+      }
+    };
+    
+    const getCategoryBadge = (cat) => {
+      switch (cat) {
+        case 'Work': return 'bg-blue-500';
+        case 'Personal': return 'bg-emerald-500';
+        case 'Exercise': return 'bg-orange-500';
+        default: return 'bg-slate-400';
+      }
+    };
 
-const Card = ({ children, className = '' }) => html`
-  <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden ${className}">${children}</div>
-`;
+    // --- 개별 뷰 컴포넌트 ---
+    const MonthlyView = ({ items, currentDate, setCurrentDate, setView, openEditor, todayStr, setViewingDate }) => {
+      const year = currentDate.getFullYear();
+      const month = currentDate.getMonth();
+      const days = [];
+      const startDay = getFirstDayOfMonth(year, month);
+      const totalDaysCount = getDaysInMonth(year, month);
+      for (let i = 0; i < startDay; i++) days.push(null);
+      for (let i = 1; i <= totalDaysCount; i++) days.push(i);
+      const daysOfWeek = ['SUN', 'MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT'];
 
-const MoneyText = ({ amount, className = '', colorClass = 'text-slate-800' }) => html`
-  <span className="font-mono font-black ${colorClass} ${className}">${Number(amount || 0).toLocaleString()}원</span>
-`;
+      const getEventDuration = (s) => {
+        if (!s.endDate || s.endDate <= s.date) return 1;
+        const d1 = new Date(s.date);
+        const d2 = new Date(s.endDate);
+        return Math.round((d2 - d1) / (1000 * 60 * 60 * 24)) + 1;
+      };
 
-const Modal = ({ isOpen, onClose, title, children, maxWidth = "max-w-md", zIndex = "z-50" }) => {
-  if (!isOpen) return null;
-  return html`
-    <div className="fixed inset-0 ${zIndex} flex items-end sm:items-center justify-center bg-black/60 backdrop-blur-sm p-0 sm:p-4 animate-in fade-in duration-200">
-      <div className="bg-white rounded-t-3xl sm:rounded-3xl w-full ${maxWidth} overflow-hidden shadow-2xl flex flex-col max-h-[92vh] sm:max-h-[95vh]">
-        <div className="flex justify-between items-center p-4 sm:p-5 border-b bg-slate-50 shrink-0">
-          <h3 className="text-sm sm:text-lg font-bold text-slate-800">${title}</h3>
-          <button onClick=${onClose} className="p-2 hover:bg-slate-200 rounded-full transition-colors text-slate-400">
-            <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
-          </button>
-        </div>
-        <div className="p-4 sm:p-6 overflow-y-auto modal-scroll bg-white text-slate-800">${children}</div>
-      </div>
-    </div>
-  `;
-};
+      const sortSchedules = (a, b) => {
+        const durA = getEventDuration(a);
+        const durB = getEventDuration(b);
+        if (durA !== durB) return durB - durA; // longer duration first
+        const impA = getImpScore(a.importance);
+        const impB = getImpScore(b.importance);
+        if (impA !== impB) return impB - impA; // higher importance first
+        if (a.date !== b.date) return a.date.localeCompare(b.date); // earlier start date first
+        return a.id.localeCompare(b.id); // stable id sort
+      };
 
-// --- Error Boundary ---
-class ErrorBoundary extends React.Component {
-  constructor(props) {
-    super(props);
-    this.state = { hasError: false, error: null };
-  }
-  static getDerivedStateFromError(error) { return { hasError: true, error }; }
-  componentDidCatch(error, errorInfo) { console.error("Error caught:", error, errorInfo); }
-  render() {
-    if (this.state.hasError) {
       return html`
-        <div className="h-screen flex items-center justify-center bg-slate-50 p-6">
-          <${Card} className="max-w-md text-center p-6">
-            <div className="text-red-500 mb-4 flex justify-center">
-              <svg xmlns="http://www.w3.org/2000/svg" width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z"/><path d="M12 9v4"/><path d="M12 17h.01"/></svg>
+        <div className="flex-1 p-2 md:p-4 overflow-auto">
+          <div className="flex items-center justify-between mb-4 md:mb-6 px-1">
+            <h2 className="text-lg md:text-2xl font-bold">${year}년 ${month + 1}월</h2>
+            <div className="flex gap-1">
+              <button onClick=${() => setCurrentDate(new Date(year, month - 1, 1))} className="p-2 bg-white border rounded hover:bg-gray-50"><i className="fas fa-chevron-left"></i></button>
+              <button onClick=${() => setCurrentDate(new Date())} className="px-3 py-2 bg-white border rounded font-bold text-xs shadow-sm hover:bg-gray-50">Today</button>
+              <button onClick=${() => setCurrentDate(new Date(year, month + 1, 1))} className="p-2 bg-white border rounded shadow-sm hover:bg-gray-50"><i className="fas fa-chevron-right"></i></button>
             </div>
-            <h2 className="text-lg font-bold text-slate-800">오류가 발생했습니다</h2>
-            <p className="text-sm mt-2 text-slate-500 mb-6">${this.state.error?.toString()}</p>
-            <${Button} onClick=${() => window.location.reload()} className="mx-auto">새로고침<//>
-          <//>
+          </div>
+          <div className="grid grid-cols-7 border-t border-l border-slate-200 shadow-sm rounded-lg overflow-hidden text-[10px] md:text-xs">
+            ${daysOfWeek.map((day, i) => html`
+              <div key=${day} className=${`p-2 text-center font-bold border-r border-b ${i === 0 ? 'bg-red-50 text-red-500' : i === 6 ? 'bg-blue-50 text-blue-500' : 'bg-slate-50 text-slate-400'}`}>${day}</div>
+            `)}
+            ${days.map((day, idx) => {
+              const dateStr = day ? `${year}-${String(month + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}` : null;
+              const isToday = dateStr === todayStr;
+              
+              const daySchedules = items.filter(it => {
+                if (it.type !== 'Schedule') return false;
+                const isMulti = it.endDate && it.endDate !== "" && it.endDate !== it.date && it.endDate > it.date;
+                if (!isMulti) {
+                  return it.date === dateStr;
+                }
+                return dateStr >= it.date && dateStr <= it.endDate;
+              }).sort(sortSchedules);
+
+              const hasSchedules = daySchedules.length > 0;
+
+              return html`
+                <div 
+                  key=${idx} 
+                  className=${`calendar-grid-cell p-1 border-r border-b transition-colors ${day && hasSchedules ? 'cursor-pointer' : ''} ${isToday ? 'bg-blue-50/50' : 'bg-white'}`}
+                  onClick=${() => {
+                    if (day && hasSchedules) {
+                      setViewingDate(dateStr);
+                    }
+                  }}
+                  onDoubleClick=${(e) => {
+                    if (!day) return;
+                    e.stopPropagation();
+                    if (!hasSchedules && !hasSchedulesInWeek(dateStr, items)) {
+                      setCurrentDate(parseDateStr(dateStr));
+                      setView('weekly');
+                    }
+                  }}
+                >
+                  ${day && html`
+                    <div className="flex flex-col h-full overflow-hidden">
+                      <span className=${`text-[10px] md:text-xs font-black px-1.5 py-0.5 rounded w-fit ${isToday ? 'bg-blue-600 text-white shadow-sm' : idx % 7 === 0 ? 'text-red-500' : idx % 7 === 6 ? 'text-blue-500' : 'text-slate-700'}`}>${day}</span>
+                      <div className="flex flex-col gap-1 mt-1 overflow-y-auto no-scrollbar">
+                        ${daySchedules.map(s => {
+                          const isMulti = s.endDate && s.endDate !== "" && s.endDate !== s.date && s.endDate > s.date;
+                          const isStart = !isMulti || dateStr === s.date;
+                          const isEnd = !isMulti || dateStr === s.endDate;
+                          const showTitle = isStart || (idx % 7 === 0);
+
+                          return html`
+                            <div 
+                              key=${s.id} 
+                              onClick=${(e) => { 
+                                e.stopPropagation(); 
+                                setViewingDate(dateStr); 
+                              }} 
+                              className=${`schedule-item-monthly text-[8px] md:text-[10px] py-0.5 px-1.5 leading-tight whitespace-nowrap overflow-hidden text-ellipsis font-medium shadow-sm cursor-pointer ${getCategoryColor(s.category)}`}
+                              style=${{
+                                marginLeft: isStart ? '0' : '-5px',
+                                marginRight: isEnd ? '0' : '-5px',
+                                borderTopLeftRadius: isStart ? '0.25rem' : '0',
+                                borderBottomLeftRadius: isStart ? '0.25rem' : '0',
+                                borderTopRightRadius: isEnd ? '0.25rem' : '0',
+                                borderBottomRightRadius: isEnd ? '0.25rem' : '0',
+                                borderLeftWidth: isStart ? '1px' : '0',
+                                borderRightWidth: isEnd ? '1px' : '0',
+                                zIndex: isMulti ? 5 : 1,
+                              }}
+                            >
+                              ${showTitle ? html`
+                                <${React.Fragment}>
+                                  ${s.importance !== 'None' && html`<span className="mr-1 text-red-500 font-bold">${s.importance}</span>`}
+                                  ${s.recurrence && s.recurrence !== 'none' && html`<i className="fas fa-redo text-[8px] mr-1 opacity-60"></i>`}
+                                  ${s.title}
+                                </${React.Fragment}>
+                              ` : html`
+                                <span className="opacity-0">&nbsp;</span>
+                              `}
+                            </div>
+                          `;
+                        })}
+                      </div>
+                    </div>
+                  `}
+                </div>
+              `;
+            })}
+          </div>
         </div>
       `;
-    }
-    return this.props.children;
-  }
-}
-
-// --- Custom Hooks ---
-const useAccounting = () => {
-  const [data, setData] = useState({
-    initialSetup: { debits: [], credits: [] },
-    accounts: { assets: [], liabilities: [], revenue: [], expenses: [] },
-    transactions: [],
-    budgets: {}
-  });
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState(null);
-
-  const flatAccounts = useMemo(() => [
-    ...data.accounts.assets, ...data.accounts.liabilities, ...data.accounts.revenue, ...data.accounts.expenses
-  ], [data.accounts]);
-
-  const normalizeData = (rawData) => {
-    const sortByName = (arr) => [...arr].sort((a, b) => a.name.localeCompare(b.name, 'ko-KR'));
-    const accs = {
-      assets: sortByName(rawData.accounts?.assets || []),
-      liabilities: sortByName(rawData.accounts?.liabilities || []),
-      revenue: sortByName(rawData.accounts?.revenue || []),
-      expenses: sortByName(rawData.accounts?.expenses || [])
-    };
-    const allAccs = [...accs.assets, ...accs.liabilities, ...accs.revenue, ...accs.expenses];
-    
-    const resolveId = (item) => {
-      if (item.accountId) return item.accountId;
-      if (item.account === '결산(임시)') return 'closing_temp';
-      const found = allAccs.find(a => a.name === item.account);
-      return found ? found.id : String(item.account);
     };
 
-    return {
-      initialSetup: {
-        debits: (rawData.initialSetup?.debits || []).map(d => ({ accountId: resolveId(d), amount: d.amount })),
-        credits: (rawData.initialSetup?.credits || []).map(c => ({ accountId: resolveId(c), amount: c.amount }))
-      },
-      accounts: accs,
-      transactions: (rawData.transactions || []).map(tx => ({
-        ...tx,
-        debits: tx.debits.map(d => ({ accountId: resolveId(d), amount: d.amount })),
-        credits: tx.credits.map(c => ({ accountId: resolveId(c), amount: c.amount }))
-      })),
-      budgets: rawData.budgets || {}
-    };
-  };
+    const WeeklyView = ({ items, currentDate, setCurrentDate, toggleHabitStatus, openEditor, todayStr }) => {
+      const curr = new Date(currentDate);
+      const monday = new Date(curr.setDate(curr.getDate() - curr.getDay() + (curr.getDay() === 0 ? -6 : 1)));
+      const weekDays = Array.from({length: 7}, (_, i) => new Date(new Date(monday).setDate(monday.getDate() + i)));
+      const dayNames = ['SUN', 'MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT'];
 
-  const loadData = useCallback(async (retryCount = 0) => {
-    setLoading(true); setError(null);
-    try {
-      if (typeof google !== 'undefined') {
-        const res = await new Promise((resolve, reject) => {
-          google.script.run.withSuccessHandler(resolve).withFailureHandler(reject).getAllData();
-        });
-        setData(normalizeData(res));
-      } else {
-        // Mock data for local interactive prototype
-        const today = new Date();
-        const currentMonth = today.toISOString().slice(0, 7);
-        const lastMonthDate = new Date(today.getFullYear(), today.getMonth() - 1, 1);
-        const lastMonth = lastMonthDate.toISOString().slice(0, 7);
-        
-        const mockRes = {
-          initialSetup: {
-            debits: [{ accountId: 'a1', amount: 5000000 }, { accountId: 'a2', amount: 500000 }],
-            credits: [{ accountId: 'e1', amount: 5500000 }]
-          },
-          accounts: {
-            assets: [
-              { id: 'a1', name: '보통예금', subtype: 'fixed' },
-              { id: 'a2', name: '현금', subtype: 'fixed' }
-            ],
-            liabilities: [
-              { id: 'l1', name: '신용카드', subtype: 'variable' },
-              { id: 'e1', name: '이익잉여금', subtype: 'fixed' }
-            ],
-            revenue: [
-              { id: 'r1', name: '급여', subtype: 'fixed' },
-              { id: 'r2', name: '이자수익', subtype: 'variable' }
-            ],
-            expenses: [
-              { id: 'x1', name: '식비', subtype: 'variable' },
-              { id: 'x2', name: '교통비', subtype: 'variable' },
-              { id: 'x3', name: '주거비', subtype: 'fixed' },
-              { id: 'x4', name: '통신비', subtype: 'fixed' }
-            ]
-          },
-          transactions: [
-            {
-              id: 'tx-1',
-              date: `${currentMonth}-01`,
-              debits: [{ accountId: 'x3', amount: 500000 }],
-              credits: [{ accountId: 'a1', amount: 500000 }],
-              memo: '월세 납부'
-            },
-            {
-              id: 'tx-2',
-              date: `${currentMonth}-02`,
-              debits: [{ accountId: 'x1', amount: 12000 }],
-              credits: [{ accountId: 'l1', amount: 12000 }],
-              memo: '점심 식사'
-            },
-            {
-              id: 'tx-3',
-              date: `${currentMonth}-03`,
-              debits: [{ accountId: 'x1', amount: 45000 }],
-              credits: [{ accountId: 'l1', amount: 45000 }],
-              memo: '마트 장보기'
-            },
-            {
-              id: 'tx-4',
-              date: `${currentMonth}-04`,
-              debits: [{ accountId: 'x2', amount: 65000 }],
-              credits: [{ accountId: 'a1', amount: 65000 }],
-              memo: '교통카드 충전'
-            },
-            {
-              id: 'tx-5',
-              date: `${currentMonth}-05`,
-              debits: [{ accountId: 'a1', amount: 2500000 }],
-              credits: [{ accountId: 'r1', amount: 2500000 }],
-              memo: '월급 입금'
-            },
-            // Last month transactions
-            {
-              id: 'tx-6',
-              date: `${lastMonth}-01`,
-              debits: [{ accountId: 'x3', amount: 500000 }],
-              credits: [{ accountId: 'a1', amount: 500000 }],
-              memo: '지난달 월세 납부'
-            },
-            {
-              id: 'tx-7',
-              date: `${lastMonth}-15`,
-              debits: [{ accountId: 'x1', amount: 250000 }],
-              credits: [{ accountId: 'l1', amount: 250000 }],
-              memo: '외식비 통합 지출'
-            }
-          ],
-          budgets: {
-            [lastMonth]: {
-              'x1': 200000,
-              'x2': 50000,
-              'x3': 500000,
-              'other': 100000
-            },
-            [currentMonth]: {
-              'x1': 250000,
-              'x2': 70000,
-              'x3': 500000,
-              'other': 120000
-            }
-          }
-        };
-        setData(normalizeData(mockRes));
-        setTimeout(() => setLoading(false), 500);
-      }
-    } catch (e) {
-      if (retryCount < 2) setTimeout(() => loadData(retryCount + 1), 1000);
-      else setError('데이터 로딩 실패');
-    } finally {
-      if(typeof google !== 'undefined') setLoading(false);
-    }
-  }, []);
-
-  useEffect(() => { loadData(); }, [loadData]);
-
-  const getAccountById = useCallback((id) => {
-    if (id === 'closing_temp') return { id: 'closing_temp', name: '결산(임시)' };
-    const found = flatAccounts.find(a => String(a.id) === String(id));
-    return found || { id, name: id }; 
-  }, [flatAccounts]);
-
-  const runGasCommand = (cmd, ...args) => {
-    return new Promise((resolve, reject) => {
-      if (typeof google === 'undefined') { resolve({success: true}); return; }
-      google.script.run.withSuccessHandler(res => {
-        if(res) resolve(res); else reject("명령 실패");
-      }).withFailureHandler(reject)[cmd](...args);
-    });
-  };
-
-  const saveTransaction = async (tx) => {
-    setData(prev => {
-      const idx = prev.transactions.findIndex(t => t.id === tx.id);
-      const newTxs = [...prev.transactions];
-      if (idx >= 0) newTxs[idx] = tx; else newTxs.push(tx);
-      return { ...prev, transactions: newTxs };
-    });
-    try { await runGasCommand('saveTransaction', tx); } 
-    catch (e) { alert('거래 저장 실패: ' + e); loadData(); }
-  };
-
-  const deleteTransaction = async (id) => {
-    setData(prev => ({ ...prev, transactions: prev.transactions.filter(t => t.id !== id) }));
-    try { await runGasCommand('deleteTransaction', id); } 
-    catch (e) { alert('거래 삭제 실패: ' + e); loadData(); }
-  };
-
-  const saveSettingsData = async (newInitialSetup, newAccounts) => {
-    setData(prev => ({ ...prev, initialSetup: newInitialSetup, accounts: newAccounts }));
-    try { await runGasCommand('saveSettings', { initialSetup: newInitialSetup, accounts: newAccounts }); } 
-    catch (e) { alert('설정 저장 실패: ' + e); loadData(); }
-  };
-
-  const saveBudget = async (month, budgetData) => {
-    setData(prev => ({ ...prev, budgets: { ...prev.budgets, [month]: budgetData } }));
-    try { await runGasCommand('saveBudget', month, budgetData); }
-    catch (e) { alert('예산 저장 실패: ' + e); loadData(); }
-  };
-
-  return { data, setData, loading, error, getAccountById, saveTransaction, deleteTransaction, saveSettingsData, saveBudget, flatAccounts, reload: loadData };
-};
-
-// --- 컴포넌트 ---
-const AccountGridPicker = ({ accounts, onPick, allowedCategories }) => {
-  const allCategories = [
-    { key: 'assets', label: '자산', color: 'bg-blue-50 text-blue-700 border-blue-200 hover:bg-blue-100' },
-    { key: 'liabilities', label: '부채', color: 'bg-red-50 text-red-700 border-red-200 hover:bg-red-100' },
-    { key: 'revenue', label: '수익', color: 'bg-emerald-50 text-emerald-700 border-emerald-200 hover:bg-emerald-100' },
-    { key: 'expenses', label: '비용', color: 'bg-orange-50 text-orange-700 border-orange-200 hover:bg-orange-100' }
-  ];
-  const categories = allowedCategories
-    ? allCategories.filter(c => allowedCategories.includes(c.key))
-    : allCategories;
-  return html`
-    <div className="space-y-6 animate-in slide-in-from-bottom-2 duration-300 pb-10">
-      ${categories.map(cat => html`
-        <div key=${cat.key}>
-          <h4 className="text-[10px] font-black uppercase tracking-widest text-slate-400 mb-3 ml-1">${cat.label}</h4>
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
-            ${(accounts[cat.key] || []).filter(a => a.name !== '이익잉여금').map(a => html`
-              <button key=${a.id} onClick=${() => onPick(a.id)} className="p-3 rounded-xl border text-xs font-bold transition-all active:scale-95 hover:shadow-md ${cat.color}">${a.name}</button>
-            `)}
-            ${cat.key === 'liabilities' && html`
-              <button onClick=${() => onPick('closing_temp')} className="p-3 rounded-xl border text-xs font-bold bg-slate-50 text-slate-400 border-slate-200 hover:bg-slate-100 transition-colors">결산(임시)</button>
-            `}
-          </div>
-        </div>
-      `)}
-    </div>
-  `;
-};
-
-const MonthlyIncomeExpenseReport = ({ accounts, transactions, getAccountById, onEditTransaction }) => {
-  const [targetMonth, setTargetMonth] = useState(new Date().toISOString().slice(0, 7));
-  const [reportType, setReportType] = useState('expenses'); // 'expenses' | 'revenue'
-  const [expandedAccounts, setExpandedAccounts] = useState({});
-
-  const revenueAccountIds = useMemo(() => accounts?.revenue?.map(r => r.id) || [], [accounts]);
-  const expenseAccountIds = useMemo(() => accounts?.expenses?.map(e => e.id) || [], [accounts]);
-
-  const targetAccountIds = useMemo(() => {
-    return reportType === 'revenue' ? revenueAccountIds : expenseAccountIds;
-  }, [reportType, revenueAccountIds, expenseAccountIds]);
-
-  const reportData = useMemo(() => {
-    const monthlyTx = transactions.filter(t => {
-      const isClosingTx = (t.id && String(t.id).startsWith('CLOSE-')) || (t.memo && t.memo.includes('[결산'));
-      return t.date.startsWith(targetMonth) && !isClosingTx;
-    });
-    
-    let map = {};
-    let totalVal = 0;
-
-    targetAccountIds.forEach(accId => { map[accId] = { total: 0, lines: [] }; });
-
-    monthlyTx.forEach(tx => {
-      (tx.debits || []).forEach(d => {
-        if (targetAccountIds.includes(d.accountId)) {
-          if (!map[d.accountId]) map[d.accountId] = { total: 0, lines: [] };
-          const amt = reportType === 'revenue' ? -d.amount : d.amount;
-          map[d.accountId].lines.push({ txId: tx.id, date: tx.date, memo: tx.memo, amount: amt });
-          map[d.accountId].total += amt;
-          totalVal += amt;
-        }
-      });
-      (tx.credits || []).forEach(c => {
-        if (targetAccountIds.includes(c.accountId)) {
-          if (!map[c.accountId]) map[c.accountId] = { total: 0, lines: [] };
-          const amt = reportType === 'revenue' ? c.amount : -c.amount;
-          map[c.accountId].lines.push({ txId: tx.id, date: tx.date, memo: tx.memo, amount: amt });
-          map[c.accountId].total += amt;
-          totalVal += amt;
-        }
-      });
-    });
-
-    const activeAccountIds = Object.keys(map)
-      .filter(accId => map[accId].lines.length > 0)
-      .sort((a, b) => map[b].total - map[a].total);
-
-    activeAccountIds.forEach(accId => {
-      map[accId].lines.sort((a, b) => a.date.localeCompare(b.date));
-    });
-
-    return { map, activeAccountIds, totalVal };
-  }, [transactions, targetMonth, targetAccountIds, reportType]);
-
-  const toggleAccordion = (accountId) => {
-    setExpandedAccounts(prev => ({ ...prev, [accountId]: !prev[accountId] }));
-  };
-
-  return html`
-    <div className="max-w-4xl mx-auto space-y-6 animate-in fade-in duration-300 pb-10">
-      <div className="bg-white p-4 sm:p-5 rounded-2xl shadow-sm border border-slate-200 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-        <h2 className="text-lg sm:text-xl font-black text-slate-800 flex items-center gap-2">
-          <i data-lucide=${reportType === 'revenue' ? 'trending-up' : 'receipt'} className=${reportType === 'revenue' ? 'text-emerald-500' : 'text-orange-500'}></i> 월간손익명세
-        </h2>
-        <div className="flex items-center gap-3 self-end sm:self-auto">
-          <div className="bg-slate-100 p-1 rounded-xl flex gap-1 border border-slate-200">
-            <button 
-              onClick=${() => { setReportType('revenue'); setExpandedAccounts({}); }} 
-              className=${`px-3 py-1.5 rounded-lg text-xs font-black transition-all ${reportType === 'revenue' ? 'bg-white text-emerald-600 shadow-sm' : 'text-slate-500 hover:text-slate-800'}`}
-            >
-              수익
-            </button>
-            <button 
-              onClick=${() => { setReportType('expenses'); setExpandedAccounts({}); }} 
-              className=${`px-3 py-1.5 rounded-lg text-xs font-black transition-all ${reportType === 'expenses' ? 'bg-white text-orange-600 shadow-sm' : 'text-slate-500 hover:text-slate-800'}`}
-            >
-              비용
-            </button>
-          </div>
-          <div className="flex items-center gap-2 bg-slate-50 px-3 py-1.5 rounded-xl border border-slate-200">
-            <i data-lucide="calendar" className="w-4 h-4 text-slate-400"></i>
-            <input type="month" value=${targetMonth} onChange=${(e) => setTargetMonth(e.target.value)} className="bg-transparent font-bold text-slate-700 border-none outline-none text-sm cursor-pointer" />
-          </div>
-        </div>
-      </div>
-
-      <div className="bg-white p-5 rounded-2xl shadow-sm border border-slate-200 space-y-4">
-        <div className="flex justify-between items-center mb-4 border-b-2 pb-2 transition-all duration-300" style=${{ borderColor: reportType === 'revenue' ? '#10b981' : '#f97316' }}>
-          <h3 className="text-sm sm:text-base font-bold text-slate-700 uppercase tracking-widest">
-            ${reportType === 'revenue' ? '수익 계정과목별 상세내역' : '비용 계정과목별 상세내역'}
-          </h3>
-          <div className="text-right">
-            <span className="text-[10px] font-black text-slate-400 uppercase mr-2">
-              ${reportType === 'revenue' ? '총 수익액' : '총 지출액'}
-            </span>
-            <span className=${`font-mono font-black text-lg sm:text-xl transition-all duration-300 ${reportType === 'revenue' ? 'text-emerald-600' : 'text-orange-600'}`}>
-              ${reportData.totalVal.toLocaleString()}원
-            </span>
-          </div>
-        </div>
-
-        ${reportData.activeAccountIds.length === 0 && html`
-          <p className="text-slate-400 text-sm text-center py-8 bg-slate-50 rounded-xl border border-dashed border-slate-200">
-            해당 월에 발생한 ${reportType === 'revenue' ? '수익' : '지출'} 내역이 없습니다.
-          </p>
-        `}
-
-        <div className="space-y-3">
-          ${reportData.activeAccountIds.map(accountId => {
-            const isExpanded = !!expandedAccounts[accountId];
-            const data = reportData.map[accountId];
-            const accountName = getAccountById(accountId).name;
-
-            return html`
-              <div key=${accountId} className="border border-slate-200 rounded-xl overflow-hidden transition-all shadow-sm">
-                <div onClick=${() => toggleAccordion(accountId)} className="flex justify-between items-center p-3 sm:p-4 bg-slate-50 hover:bg-slate-100 cursor-pointer transition select-none">
-                  <div className="font-extrabold text-slate-800 text-sm sm:text-base flex items-center gap-2">
-                    <span className=${`px-2 py-0.5 rounded-md text-[10px] font-black ${reportType === 'revenue' ? 'bg-emerald-100 text-emerald-600' : 'bg-orange-100 text-orange-600'}`}>
-                      ${reportType === 'revenue' ? '수익' : '비용'}
-                    </span>
-                    ${accountName}
-                  </div>
-                  <div className="flex items-center gap-4 text-sm">
-                    <span className="font-mono font-black text-slate-800">${data.total.toLocaleString()}원</span>
-                    <div className="w-6 flex justify-end text-slate-400">
-                      ${isExpanded ? html`<i data-lucide="chevron-up" className="w-4 h-4"></i>` : html`<i data-lucide="chevron-down" className="w-4 h-4"></i>`}
-                    </div>
-                  </div>
-                </div>
-
-                ${isExpanded && html`
-                  <div className="border-t border-slate-200 bg-white animate-in slide-in-from-top-2 duration-200">
-                    <div className="p-3">
-                      <table className="w-full text-left text-xs sm:text-sm">
-                        <thead className="text-slate-400 text-[10px] font-black uppercase tracking-widest border-b border-slate-100 bg-slate-50">
-                          <tr>
-                            <th className="py-2 px-3 rounded-tl-lg w-32 whitespace-nowrap">날짜</th>
-                            <th className="py-2 px-3">거래내용</th>
-                            <th className="py-2 px-3 text-right rounded-tr-lg w-28">금액</th>
-                          </tr>
-                        </thead>
-                        <tbody className="divide-y divide-slate-50">
-                          ${data.lines.map((line, idx) => html`
-                            <tr key=${idx} onClick=${() => line.txId && onEditTransaction && onEditTransaction(line.txId)} className=${`transition ${line.txId && onEditTransaction ? 'cursor-pointer hover:bg-indigo-50 active:bg-indigo-100' : 'hover:bg-slate-50'}`}>
-                              <td className="py-2.5 px-3 text-slate-500 font-mono whitespace-nowrap">${line.date}</td>
-                              <td className="py-2.5 px-3 text-slate-700 font-bold">${line.memo || '내역 없음'}</td>
-                              <td className="py-2.5 px-3 text-right font-mono font-bold text-slate-800">${line.amount.toLocaleString()}원</td>
-                            </tr>
-                          `)}
-                        </tbody>
-                      </table>
-                    </div>
-                  </div>
-                `}
-              </div>
-            `;
-          })}
-        </div>
-      </div>
-    </div>
-  `;
-};
-
-const MonthlyCalendar = ({ accounts, transactions, getAccountById, onEditTransaction }) => {
-  const [currentDate, setCurrentDate] = useState(new Date());
-  const [selectedDate, setSelectedDate] = useState(null);
-
-  const year = currentDate.getFullYear();
-  const month = currentDate.getMonth();
-  const firstDayOfMonth = new Date(year, month, 1).getDay();
-  const daysInMonth = new Date(year, month + 1, 0).getDate();
-
-  const revenueAccountIds = useMemo(() => (accounts?.revenue || []).map(a => a.id), [accounts]);
-  const expenseAccountIds = useMemo(() => (accounts?.expenses || []).map(a => a.id), [accounts]);
-
-  const dailyData = useMemo(() => {
-    const data = {};
-    (transactions || []).forEach(tx => {
-      const isClosingTx = (tx.id && String(tx.id).startsWith('CLOSE-')) || (tx.memo && tx.memo.includes('[결산'));
-      if (isClosingTx) return;
-
-      if (!data[tx.date]) data[tx.date] = { revenue: 0, expense: 0, txs: [] };
-      data[tx.date].txs.push(tx);
-
-      (tx.credits || []).forEach(c => { if (revenueAccountIds.includes(c.accountId)) data[tx.date].revenue += c.amount; });
-      (tx.debits || []).forEach(d => {
-        if (revenueAccountIds.includes(d.accountId)) data[tx.date].revenue -= d.amount;
-        if (expenseAccountIds.includes(d.accountId)) data[tx.date].expense += d.amount;
-      });
-      (tx.credits || []).forEach(c => {
-        if (expenseAccountIds.includes(c.accountId)) data[tx.date].expense -= c.amount;
-      });
-    });
-    return data;
-  }, [transactions, revenueAccountIds, expenseAccountIds]);
-
-  const days = [];
-  for (let i = 0; i < firstDayOfMonth; i++) days.push(null);
-  for (let i = 1; i <= daysInMonth; i++) days.push(i);
-
-  const handlePrevMonth = () => setCurrentDate(new Date(year, month - 1, 1));
-  const handleNextMonth = () => setCurrentDate(new Date(year, month + 1, 1));
-
-  useEffect(() => {
-    setTimeout(() => { if (window.lucide) window.lucide.createIcons(); }, 100);
-  }, [currentDate, selectedDate]);
-
-  return html`
-    <div className="max-w-6xl mx-auto space-y-4 sm:space-y-6 animate-in fade-in duration-300 pb-10">
-      <div className="bg-white p-4 sm:p-5 rounded-2xl shadow-sm border border-slate-200 flex items-center justify-between">
-        <h2 className="text-lg sm:text-xl font-black text-slate-800 flex items-center gap-2">
-          <i data-lucide="calendar-days" className="text-indigo-500"></i> 월간 캘린더
-        </h2>
-        <div className="flex items-center gap-4">
-          <button onClick=${handlePrevMonth} className="p-2 hover:bg-slate-100 rounded-full transition-colors text-slate-500"><i data-lucide="chevron-left" className="w-5 h-5"></i></button>
-          <span className="font-black text-slate-700 w-24 text-center">${year}년 ${month + 1}월</span>
-          <button onClick=${handleNextMonth} className="p-2 hover:bg-slate-100 rounded-full transition-colors text-slate-500"><i data-lucide="chevron-right" className="w-5 h-5"></i></button>
-        </div>
-      </div>
-
-      <div className="bg-white p-3 sm:p-5 rounded-2xl shadow-sm border border-slate-200">
-        <div className="grid grid-cols-7 gap-1 sm:gap-2 mb-2">
-          ${['일', '월', '화', '수', '목', '금', '토'].map((d, i) => html`
-            <div key=${d} className=${`text-center font-bold text-xs sm:text-sm py-2 ${i === 0 ? 'text-red-400' : i === 6 ? 'text-blue-400' : 'text-slate-400'}`}>${d}</div>
-          `)}
-        </div>
-        <div className="grid grid-cols-7 gap-1 sm:gap-2">
-          ${days.map((d, i) => {
-            if (!d) return html`<div key=${i} className="bg-slate-50/50 rounded-xl min-h-[80px] sm:min-h-[120px]"></div>`;
-            const dateStr = `${year}-${String(month + 1).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
-            const info = dailyData[dateStr] || { revenue: 0, expense: 0, txs: [] };
-            
-            return html`
-              <div key=${i} onClick=${() => info.txs.length > 0 && setSelectedDate(dateStr)} className=${`min-h-[75px] sm:min-h-[120px] p-0.5 sm:p-2 rounded-xl border transition-all flex flex-col min-w-0 ${info.txs.length > 0 ? 'cursor-pointer hover:border-indigo-400 hover:shadow-md bg-white border-slate-200' : 'bg-white border-slate-100'}`}>
-                <span className=${`font-bold text-[10px] sm:text-sm mb-1 ml-1 ${i % 7 === 0 ? 'text-red-400' : i % 7 === 6 ? 'text-blue-400' : 'text-slate-600'}`}>${d}</span>
-                <div className="flex-1 space-y-0.5 sm:space-y-1 mt-auto flex flex-col justify-end min-w-0 overflow-visible">
-                  ${info.revenue !== 0 && html`
-                    <div className="w-full text-right text-[10px] sm:text-xs font-mono font-black text-emerald-600 bg-emerald-50/60 sm:bg-emerald-50 px-0.5 rounded leading-[1.1] sm:leading-normal overflow-visible flex justify-end">
-                      <div className="origin-right scale-[0.7] sm:scale-100 whitespace-nowrap">
-                        ${info.revenue > 0 ? '+' : ''}${info.revenue.toLocaleString()}
-                      </div>
-                    </div>
-                  `}
-                  ${info.expense !== 0 && html`
-                    <div className="w-full text-right text-[10px] sm:text-xs font-mono font-black text-red-500 bg-red-50/60 sm:bg-red-50 px-0.5 rounded leading-[1.1] sm:leading-normal overflow-visible flex justify-end">
-                      <div className="origin-right scale-[0.7] sm:scale-100 whitespace-nowrap">
-                        ${info.expense > 0 ? '-' : '+'}${Math.abs(info.expense).toLocaleString()}
-                      </div>
-                    </div>
-                  `}
-                </div>
-              </div>
-            `;
-          })}
-        </div>
-      </div>
-
-      <${Modal} isOpen=${!!selectedDate} onClose=${() => setSelectedDate(null)} title="${selectedDate} 상세 내역">
-        <div className="space-y-3 modal-scroll max-h-[60vh] overflow-y-auto pr-2">
-          ${selectedDate && dailyData[selectedDate] && dailyData[selectedDate].txs.map(tx => html`
-            <div key=${tx.id} onClick=${() => { onEditTransaction(tx.id); setSelectedDate(null); }} className="p-3 border border-slate-100 bg-slate-50 rounded-xl hover:bg-indigo-50 hover:border-indigo-200 transition-all cursor-pointer shadow-sm">
-              <div className="font-bold text-slate-700 mb-2">${tx.memo || '내역 없음'}</div>
-              <div className="grid grid-cols-2 gap-3 text-[11px] sm:text-xs bg-white p-2 rounded-lg border border-slate-100">
-                <div>
-                  <div className="text-[9px] text-slate-400 uppercase font-black mb-1">차변 (Debit)</div>
-                  ${tx.debits.map((d, idx) => html`
-                    <div key=${idx} className="flex justify-between items-center py-0.5">
-                      <span className="text-indigo-600 font-medium truncate pr-1">${getAccountById(d.accountId)?.name}</span>
-                      <${MoneyText} amount=${d.amount} className="text-[10px] sm:text-xs" />
-                    </div>
-                  `)}
-                </div>
-                <div>
-                  <div className="text-[9px] text-slate-400 uppercase font-black mb-1">대변 (Credit)</div>
-                  ${tx.credits.map((c, idx) => html`
-                    <div key=${idx} className="flex justify-between items-center py-0.5">
-                      <span className="text-red-500 font-medium truncate pr-1">${getAccountById(c.accountId)?.name}</span>
-                      <${MoneyText} amount=${c.amount} className="text-[10px] sm:text-xs" />
-                    </div>
-                  `)}
-                </div>
-              </div>
+      return html`
+        <div className="flex-1 p-3 md:p-6 overflow-auto" id="weekly-scroll-container">
+           <div className="flex flex-col md:flex-row md:items-center justify-between mb-6 gap-4">
+            <h2 className="text-xl md:text-2xl font-bold">${monday.getFullYear()}년 ${monday.getMonth() + 1}월 주간 일정</h2>
+            <div className="flex gap-2">
+              <button onClick=${() => setCurrentDate(new Date(currentDate.setDate(currentDate.getDate()-7)))} className="p-2 bg-white border rounded shadow-sm hover:bg-gray-50 flex-1 md:flex-none"><i className="fas fa-chevron-left"></i></button>
+              <button onClick=${() => setCurrentDate(new Date())} className="px-4 py-2 bg-white border rounded font-bold text-sm shadow-sm hover:bg-gray-50 flex-1 md:flex-none">Today</button>
+              <button onClick=${() => setCurrentDate(new Date(currentDate.setDate(currentDate.getDate()+7)))} className="p-2 bg-white border rounded shadow-sm hover:bg-gray-50 flex-1 md:flex-none"><i className="fas fa-chevron-right"></i></button>
             </div>
-          `)}
-        </div>
-      <//>
-    </div>
-  `;
-};
-
-// --- Monthly Budget Component ---
-const MonthlyBudgetReport = ({ accounts, transactions, budgets = {}, saveBudget }) => {
-  const [targetMonth, setTargetMonth] = useState(new Date().toISOString().slice(0, 7));
-  const [isEditModalOpen, setIsEditModalOpen] = useState(false);
-  const [editRows, setEditRows] = useState([]);
-  const [editOtherAmount, setEditOtherAmount] = useState(0);
-  const [activeBudgetPicker, setActiveBudgetPicker] = useState(null); // null or { index }
-  const [isOtherExpanded, setIsOtherExpanded] = useState(false);
-
-  // Get active budget for the target month
-  const activeBudget = useMemo(() => {
-    if (budgets[targetMonth]) {
-      return budgets[targetMonth];
-    }
-    // Carry over from the latest month available
-    const keys = Object.keys(budgets).sort();
-    const prevKeys = keys.filter(k => k < targetMonth);
-    if (prevKeys.length > 0) {
-      return budgets[prevKeys[prevKeys.length - 1]];
-    }
-    return {};
-  }, [budgets, targetMonth]);
-
-  // Calculate spent for each expense account in targetMonth
-  const spentMap = useMemo(() => {
-    const monthlyTx = transactions.filter(t => {
-      const isClosingTx = (t.id && String(t.id).startsWith('CLOSE-')) || (t.memo && t.memo.includes('[결산'));
-      return t.date.startsWith(targetMonth) && !isClosingTx;
-    });
-
-    const map = {};
-    accounts.expenses.forEach(acc => {
-      map[acc.id] = 0;
-    });
-
-    monthlyTx.forEach(tx => {
-      (tx.debits || []).forEach(d => {
-        if (map[d.accountId] !== undefined) {
-          map[d.accountId] += d.amount;
-        }
-      });
-      (tx.credits || []).forEach(c => {
-        if (map[c.accountId] !== undefined) {
-          map[c.accountId] -= c.amount;
-        }
-      });
-    });
-
-    return map;
-  }, [transactions, targetMonth, accounts.expenses]);
-
-  // Separate budgeted and unbudgeted expense accounts
-  const budgetDataList = useMemo(() => {
-    const budgeted = [];
-    const unbudgeted = [];
-    let otherSpent = 0;
-
-    accounts.expenses.forEach(acc => {
-      const budgetAmount = activeBudget[acc.id] || 0;
-      const spentAmount = spentMap[acc.id] || 0;
-      const remainingAmount = budgetAmount - spentAmount;
-
-      if (budgetAmount > 0) {
-        budgeted.push({
-          id: acc.id,
-          name: acc.name,
-          budget: budgetAmount,
-          spent: spentAmount,
-          remaining: remainingAmount
-        });
-      } else {
-        unbudgeted.push({
-          id: acc.id,
-          name: acc.name,
-          budget: 0,
-          spent: spentAmount,
-          remaining: -spentAmount
-        });
-        otherSpent += spentAmount;
-      }
-    });
-
-    // Other Expenses
-    const otherBudget = activeBudget['other'] || 0;
-    const otherRemaining = otherBudget - otherSpent;
-
-    return {
-      budgeted: budgeted.sort((a, b) => b.budget - a.budget),
-      unbudgeted: unbudgeted.filter(a => a.spent !== 0).sort((a, b) => b.spent - a.spent),
-      other: {
-        budget: otherBudget,
-        spent: otherSpent,
-        remaining: otherRemaining
-      }
-    };
-  }, [accounts.expenses, activeBudget, spentMap]);
-
-  const totalBudget = useMemo(() => {
-    const budgetedSum = budgetDataList.budgeted.reduce((s, a) => s + a.budget, 0);
-    return budgetedSum + budgetDataList.other.budget;
-  }, [budgetDataList]);
-
-  const totalSpent = useMemo(() => {
-    return accounts.expenses.reduce((s, acc) => s + (spentMap[acc.id] || 0), 0);
-  }, [accounts.expenses, spentMap]);
-
-  const totalRemaining = totalBudget - totalSpent;
-
-  // Edit Modal handlers
-  const openEditModal = () => {
-    const initialRows = [];
-    Object.keys(activeBudget).forEach(key => {
-      if (key !== 'other' && activeBudget[key] > 0) {
-        initialRows.push({
-          accountId: key,
-          amount: activeBudget[key]
-        });
-      }
-    });
-    setEditRows(initialRows);
-    setEditOtherAmount(activeBudget['other'] || 0);
-    setIsEditModalOpen(true);
-  };
-
-  const handleSave = async () => {
-    const cleanedBudget = {};
-    if (editOtherAmount > 0) {
-      cleanedBudget['other'] = Number(editOtherAmount) || 0;
-    }
-    editRows.forEach(row => {
-      if (row.accountId && Number(row.amount) > 0) {
-        cleanedBudget[row.accountId] = Number(row.amount) || 0;
-      }
-    });
-    await saveBudget(targetMonth, cleanedBudget);
-    setIsEditModalOpen(false);
-  };
-
-  const handleRowAmountChange = (index, val) => {
-    setEditRows(prev => {
-      const next = [...prev];
-      next[index] = { ...next[index], amount: Number(val) || 0 };
-      return next;
-    });
-  };
-
-  const handleAddRow = () => {
-    setEditRows(prev => [...prev, { accountId: '', amount: 0 }]);
-  };
-
-  const handleRemoveRow = (index) => {
-    setEditRows(prev => prev.filter((_, i) => i !== index));
-  };
-
-  const handleBudgetAccountPick = (id) => {
-    if (activeBudgetPicker === null) return;
-    const { index } = activeBudgetPicker;
-    setEditRows(prev => {
-      const next = [...prev];
-      next[index] = { ...next[index], accountId: id };
-      return next;
-    });
-    setActiveBudgetPicker(null);
-  };
-
-  const getAccountName = (id) => {
-    const found = accounts.expenses.find(a => String(a.id) === String(id));
-    return found ? found.name : '계정 선택';
-  };
-
-  const editTotal = useMemo(() => {
-    const rowsSum = editRows.reduce((s, r) => s + (Number(r.amount) || 0), 0);
-    return rowsSum + (Number(editOtherAmount) || 0);
-  }, [editRows, editOtherAmount]);
-
-  useEffect(() => {
-    if (window.lucide) window.lucide.createIcons();
-  }, [targetMonth, isEditModalOpen, editRows, activeBudgetPicker]);
-
-  return html`
-    <div className="max-w-4xl mx-auto space-y-6 animate-in fade-in duration-300 pb-10 text-slate-800">
-      <div className="bg-white p-4 sm:p-5 rounded-2xl shadow-sm border border-slate-200 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-        <h2 className="text-lg sm:text-xl font-black text-slate-800 flex items-center gap-2">
-          <i data-lucide="piggy-bank" className="text-indigo-600"></i> 월별 예산 관리
-        </h2>
-        <div className="flex items-center gap-3 self-end sm:self-auto">
-          <${Button} variant="primary" onClick=${openEditModal} className="text-xs font-bold py-1.5 px-3">
-            <i data-lucide="edit" className="w-4 h-4"></i> 예산 수정
-          <//>
-          <div className="flex items-center gap-2 bg-slate-50 px-3 py-1.5 rounded-xl border border-slate-200 font-bold">
-            <i data-lucide="calendar" className="w-4 h-4 text-slate-400"></i>
-            <input type="month" value=${targetMonth} onChange=${(e) => setTargetMonth(e.target.value)} className="bg-transparent font-bold text-slate-700 border-none outline-none text-sm cursor-pointer" />
           </div>
-        </div>
-      </div>
-
-      <div className="bg-white p-5 rounded-2xl shadow-sm border border-slate-200 space-y-4">
-        <div className="flex justify-between items-center mb-4 border-b pb-2">
-          <h3 className="text-sm sm:text-base font-bold text-slate-700 uppercase tracking-widest">
-            ${targetMonth} 예산 현황
-          </h3>
-        </div>
-
-        ${budgetDataList.budgeted.length === 0 && budgetDataList.other.budget === 0 && html`
-          <div className="text-slate-400 text-sm text-center py-12 bg-slate-50 rounded-xl border border-dashed border-slate-200">
-            <p className="mb-3 font-semibold">설정된 예산이 없습니다.</p>
-            <${Button} onClick=${openEditModal} variant="secondary" className="mx-auto text-xs">예산 설정하기<//>
-          </div>
-        `}
-
-        ${(budgetDataList.budgeted.length > 0 || budgetDataList.other.budget > 0) && html`
           <div className="space-y-4">
-            ${budgetDataList.budgeted.map(item => {
-              const spentPct = item.budget > 0 ? Math.min(100, Math.round((item.spent / item.budget) * 100)) : 0;
-              const isOver = item.spent > item.budget;
+            ${weekDays.map((d) => {
+              const dateStr = formatDate(d);
+              const dayItems = [];
+              items.forEach(it => {
+                const isMulti = it.endDate && it.endDate !== "" && it.endDate !== it.date && it.endDate > it.date;
+                if (!isMulti) {
+                  if (it.date === dateStr) {
+                    dayItems.push(it);
+                  }
+                } else {
+                  if (it.date === dateStr) {
+                    dayItems.push({
+                      ...it,
+                      title: `${it.title} 시작일`
+                    });
+                  } else if (it.endDate === dateStr) {
+                    dayItems.push({
+                      ...it,
+                      title: `${it.title} 종료일`
+                    });
+                  }
+                }
+              });
+              dayItems.sort((a, b) => getImpScore(b.importance) - getImpScore(a.importance));
+              const dayIdx = d.getDay();
+              const isDayToday = dateStr === todayStr;
               return html`
-                <div key=${item.id} className="border border-slate-100 rounded-xl p-4 hover:shadow-md transition-shadow">
-                  <div className="flex justify-between items-center mb-2">
-                    <div className="font-extrabold text-slate-800 text-sm sm:text-base flex items-center gap-2">
-                      <span className="px-2 py-0.5 rounded-md text-[10px] font-black bg-indigo-50 text-indigo-600">
-                        지정예산
-                      </span>
-                      ${item.name}
-                    </div>
-                    <div className="text-right text-xs">
-                      <span className="font-mono text-slate-400">사용률 ${spentPct}%</span>
-                    </div>
+                <div key=${dateStr} className="flex flex-col md:flex-row gap-2 md:gap-4">
+                  <div className=${`w-full md:w-32 p-3 rounded-xl border-2 flex md:flex-col items-center justify-between md:justify-center bg-white shadow-sm transition-all ${isDayToday ? 'border-blue-500 bg-blue-50' : dayIdx === 0 ? 'border-red-100 text-red-500' : dayIdx === 6 ? 'border-blue-100 text-blue-500' : 'border-slate-100'}`}>
+                    <div className=${`text-[10px] font-black uppercase ${isDayToday ? 'text-blue-600' : 'text-slate-400'}`}>${dayNames[dayIdx]}</div>
+                    <div className=${`text-2xl md:text-4xl font-black ${isDayToday ? 'text-blue-700' : 'text-slate-800'}`}>${d.getDate()}</div>
                   </div>
-                  <div className="w-full bg-slate-100 h-2 rounded-full overflow-hidden mb-3">
-                    <div 
-                      className=${`h-full rounded-full transition-all duration-500 ${isOver ? 'bg-red-500' : 'bg-indigo-600'}`}
-                      style=${{ width: `${spentPct}%` }}
-                    ></div>
-                  </div>
-                  <div className="grid grid-cols-3 gap-2 text-center text-xs">
-                    <div className="bg-slate-50 p-2 rounded-lg">
-                      <div className="text-[9px] font-black text-slate-400 uppercase">예산액</div>
-                      <div className="font-mono font-bold text-slate-700">${item.budget.toLocaleString()}원</div>
-                    </div>
-                    <div className="bg-slate-50 p-2 rounded-lg">
-                      <div className="text-[9px] font-black text-slate-400 uppercase">사용액</div>
-                      <div className="font-mono font-bold text-slate-700">${item.spent.toLocaleString()}원</div>
-                    </div>
-                    <div className=${`p-2 rounded-lg font-bold ${item.remaining >= 0 ? 'bg-emerald-50 text-emerald-700' : 'bg-red-50 text-red-600'}`}>
-                      <div className="text-[9px] font-black uppercase">${item.remaining >= 0 ? '남은예산' : '예산초과'}</div>
-                      <div className="font-mono font-black">${Math.abs(item.remaining).toLocaleString()}원</div>
-                    </div>
+                  <div className="flex-1 bg-white p-3 rounded-xl border border-slate-200 shadow-sm flex flex-col gap-2">
+                    ${dayItems.length === 0 ? html`<div className="text-slate-300 italic text-xs py-4 text-center">No plans recorded.</div>` : 
+                      dayItems.map(it => html`
+                        <div key=${it.id} className="flex items-center gap-3 p-2.5 rounded-xl hover:bg-slate-50 cursor-pointer shadow-sm border border-transparent hover:border-slate-100" onClick=${() => openEditor(it)}>
+                          <div className=${`w-1.5 h-10 rounded-full ${getCategoryBadge(it.category)} shrink-0`}></div>
+                          <div className="flex items-center gap-2">
+                            ${it.type === 'Habit' && html`
+                              <div 
+                                className="w-7 h-7 flex items-center justify-center border-2 rounded-lg bg-white shadow-inner transition-all hover:scale-105 active:scale-95 shrink-0" 
+                                onClick=${(e) => { e.preventDefault(); e.stopPropagation(); toggleHabitStatus(it.id, it.isVirtual ? it.date : null, it.originalId); }}
+                              >
+                                ${it.status === 'CHECK' && html`<i className="fas fa-check text-green-500"></i>`}
+                                ${it.status === 'X' && html`<i className="fas fa-times text-red-400"></i>`}
+                              </div>
+                            `}
+                            ${it.importance !== 'None' && html`<span className="text-red-600 font-black text-xl">${it.importance}</span>`}
+                          </div>
+                          <div className="flex flex-col flex-1 min-w-0">
+                            <span className="font-bold text-slate-800 text-base truncate">
+                              ${it.recurrence && it.recurrence !== 'none' && html`<i className="fas fa-redo text-[10px] text-slate-400 mr-2"></i>`}
+                              ${it.title}
+                            </span>
+                            <div className="flex flex-wrap gap-3 items-center mt-0.5">
+                              ${it.time && html`<span className="text-[11px] text-slate-400 font-medium"><i className="far fa-clock mr-1"></i>${formatTimeOnly(it.time)}</span>`}
+                              ${it.location && html`<span className="text-[11px] text-blue-400 font-bold truncate max-w-[150px]"><i className="fas fa-map-marker-alt mr-1"></i>${it.location}</span>`}
+                              ${it.category && it.category !== 'None' && html`<span className=${`text-[9px] px-1.5 py-0.5 rounded font-bold uppercase ${getCategoryColor(it.category)}`}>${it.category}</span>`}
+                            </div>
+                          </div>
+                          <i className="fas fa-chevron-right text-slate-200 text-xs"></i>
+                        </div>
+                      `)
+                    }
                   </div>
                 </div>
               `;
             })}
+          </div>
+        </div>
+      `;
+    };
 
-            <div className="border border-slate-100 rounded-xl p-4 hover:shadow-md transition-shadow bg-slate-50/50">
-              <div className="flex justify-between items-center mb-2">
-                <div onClick=${() => setIsOtherExpanded(!isOtherExpanded)} className="font-extrabold text-slate-800 text-sm sm:text-base flex items-center gap-2 cursor-pointer select-none hover:text-slate-600">
-                  <span className="px-2 py-0.5 rounded-md text-[10px] font-black bg-slate-200 text-slate-600">
-                    공통예산
-                  </span>
-                  기타비용
-                  <i data-lucide=${isOtherExpanded ? "chevron-up" : "chevron-down"} className="w-4 h-4 text-slate-400 inline"></i>
-                </div>
-                <div className="text-right text-xs">
-                  <span className="font-mono text-slate-400">
-                    사용률 ${budgetDataList.other.budget > 0 ? Math.round((budgetDataList.other.spent / budgetDataList.other.budget) * 100) : 0}%
-                  </span>
-                </div>
-              </div>
-              <div className="w-full bg-slate-100 h-2 rounded-full overflow-hidden mb-3">
-                <div 
-                  className=${`h-full rounded-full transition-all duration-500 ${budgetDataList.other.spent > budgetDataList.other.budget ? 'bg-red-500' : 'bg-slate-500'}`}
-                  style=${{ width: `${budgetDataList.other.budget > 0 ? Math.min(100, Math.round((budgetDataList.other.spent / budgetDataList.other.budget) * 100)) : 0}%` }}
-                ></div>
-              </div>
-              <div className="grid grid-cols-3 gap-2 text-center text-xs">
-                <div className="bg-slate-100 p-2 rounded-lg">
-                  <div className="text-[9px] font-black text-slate-400 uppercase">예산액</div>
-                  <div className="font-mono font-bold text-slate-700">${budgetDataList.other.budget.toLocaleString()}원</div>
-                </div>
-                <div className="bg-slate-100 p-2 rounded-lg">
-                  <div className="text-[9px] font-black text-slate-400 uppercase">사용액</div>
-                  <div className="font-mono font-bold text-slate-700">${budgetDataList.other.spent.toLocaleString()}원</div>
-                </div>
-                <div className=${`p-2 rounded-lg font-bold ${budgetDataList.other.remaining >= 0 ? 'bg-emerald-50 text-emerald-700' : 'bg-red-50 text-red-600'}`}>
-                  <div className="text-[9px] font-black uppercase">${budgetDataList.other.remaining >= 0 ? '남은예산' : '예산초과'}</div>
-                  <div className="font-mono font-black">${Math.abs(budgetDataList.other.remaining).toLocaleString()}원</div>
-                </div>
-              </div>
+    const AchievementView = ({ items, currentDate }) => {
+      const [targetMonth, setTargetMonth] = useState(`${currentDate.getFullYear()}-${String(currentDate.getMonth()+1).padStart(2, '0')}`);
+      const filteredHabits = items.filter(it => it.type === 'Habit' && it.date && it.date.startsWith(targetMonth));
+      const total = filteredHabits.length;
+      const uncompleted = filteredHabits.filter(it => it.status === 'X').length;
+      const completed = filteredHabits.filter(it => it.status === 'CHECK').length;
+      const percentage = total === 0 ? 0 : Math.round((completed / total) * 100);
+      const circumference = 2 * Math.PI * 95;
+      const offset = circumference - (percentage / 100) * circumference;
 
-              ${isOtherExpanded && html`
-                <div className="mt-4 pt-3 border-t border-slate-200 bg-white p-3 rounded-xl space-y-2 animate-in slide-in-from-top-2 duration-200">
-                  <div className="text-[10px] font-black text-slate-400 uppercase tracking-wider mb-2">예산 미배정 계정별 지출액</div>
-                  ${budgetDataList.unbudgeted.length === 0 ? html`
-                    <p className="text-xs text-slate-400 italic text-center py-2">지출 내역이 없습니다.</p>
-                  ` : html`
-                    <div className="divide-y divide-slate-100">
-                      ${budgetDataList.unbudgeted.map(item => html`
-                        <div key=${item.id} className="flex justify-between py-2 text-xs">
-                          <span className="text-slate-600 font-medium">${item.name}</span>
-                          <span className="font-mono font-bold text-slate-800">${item.spent.toLocaleString()}원</span>
-                        </div>
+      const failedHabits = filteredHabits.filter(it => it.status === 'X').sort((a, b) => b.date.localeCompare(a.date));
+
+      return html`
+        <div className="flex-1 p-4 md:p-8 overflow-y-auto no-scrollbar">
+          <div className="flex flex-col items-center max-w-4xl mx-auto bg-white p-6 md:p-12 rounded-3xl shadow-lg border">
+            <div className="mb-8 w-full flex flex-col md:flex-row justify-between items-center gap-4">
+              <h2 className="text-lg md:text-2xl font-black text-slate-800 tracking-tight uppercase">Habit Achievement</h2>
+              <input type="month" value=${targetMonth} onChange=${(e) => setTargetMonth(e.target.value)} className="w-full md:w-auto p-2 border rounded-xl font-bold bg-slate-50 focus:ring-2 focus:ring-blue-500 outline-none" />
+            </div>
+            <div className="flex flex-col md:flex-row items-center gap-12 w-full justify-center">
+              <div className="relative flex items-center justify-center p-4">
+                <svg width="240" height="240" viewBox="0 0 240 240" className="donut-chart md:w-[320px] md:h-[320px]">
+                  <circle cx="120" cy="120" r="95" fill="transparent" stroke="#fee2e2" strokeWidth="24" />
+                  <circle cx="120" cy="120" r="95" fill="transparent" stroke="#22c55e" strokeWidth="24" strokeDasharray=${circumference} strokeDashoffset=${offset} strokeLinecap="round" style=${{ transition: 'stroke-dashoffset 1.2s cubic-bezier(0.4, 0, 0.2, 1)' }} />
+                </svg>
+                <div className="absolute inset-0 flex flex-col items-center justify-center">
+                  <span className="text-4xl md:text-6xl font-black text-slate-800 leading-none">${percentage}%</span>
+                  <span className="text-[10px] text-slate-400 font-bold uppercase mt-2 tracking-widest">Done</span>
+                </div>
+              </div>
+              <div className="w-full md:flex-1 bg-slate-50 p-8 rounded-2xl border text-center shadow-inner">
+                <div className="text-slate-400 text-xs font-black uppercase mb-4 tracking-widest">Stats Summary</div>
+                <div className="text-5xl md:text-7xl font-black text-slate-800 mb-2 tracking-tighter">${completed} <span className="text-slate-300 text-3xl mx-2">/</span> ${total}</div>
+                <div className="mt-6 text-xs text-slate-500 bg-white px-6 py-3 rounded-full shadow-sm font-bold border border-slate-100">${total - completed - uncompleted} habits left this month</div>
+              </div>
+            </div>
+
+            <div className="w-full mt-12 border-t pt-8">
+              <h3 className="text-base md:text-lg font-black text-slate-800 mb-4 flex items-center gap-2">
+                <i className="fas fa-times-circle text-red-500"></i> 미달성 습관 목록 (Failed Habits)
+              </h3>
+              ${failedHabits.length === 0 ? html`
+                <div className="text-slate-400 italic text-center py-8 bg-slate-50 rounded-2xl border border-dashed text-sm font-medium">
+                  이번 달에 미달성한 습관이 없습니다! 아주 훌륭합니다! 🎉
+                </div>
+              ` : html`
+                <div className="overflow-x-auto rounded-2xl border border-slate-100 shadow-sm">
+                  <table className="w-full text-left text-xs md:text-sm border-collapse bg-white">
+                    <thead>
+                      <tr className="bg-slate-50 text-slate-400 text-[10px] font-black uppercase tracking-wider border-b">
+                        <th className="py-4 px-6 w-1/4">날짜 (Date)</th>
+                        <th className="py-4 px-6 w-1/2">습관 내용 (Habit)</th>
+                        <th className="py-4 px-6 w-1/4 text-right">카테고리 (Category)</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100">
+                      ${failedHabits.map((h) => html`
+                        <tr key=${h.id} className="hover:bg-slate-50/50 transition-colors">
+                          <td className="py-4 px-6 font-bold text-slate-500 font-mono">${h.date}</td>
+                          <td className="py-4 px-6 font-black text-slate-800">
+                            <div className="flex items-center gap-2">
+                              <span className="w-2 h-2 rounded-full bg-red-400 shrink-0"></span>
+                              <span>${h.title}</span>
+                            </div>
+                          </td>
+                          <td className="py-4 px-6 text-right">
+                            ${h.category && h.category !== 'None' ? html`
+                              <span className=${`text-[10px] px-2.5 py-1 rounded-full font-bold uppercase ${getCategoryColor(h.category)}`}>
+                                ${h.category}
+                              </span>
+                            ` : html`
+                              <span className="text-slate-300 font-medium">-</span>
+                            `}
+                          </td>
+                        </tr>
                       `)}
-                    </div>
-                  `}
+                    </tbody>
+                  </table>
                 </div>
               `}
             </div>
-
-            <div className=${`p-5 rounded-2xl flex flex-col sm:flex-row justify-between items-center border shadow-inner ${totalRemaining >= 0 ? 'bg-indigo-50/50 border-indigo-100' : 'bg-red-50/50 border-red-100'}`}>
-              <div className="shrink-0 font-black mb-2 sm:mb-0 text-center sm:text-left">
-                <h4 className="font-black text-sm sm:text-base uppercase tracking-tighter text-slate-500">총 예산 대비 요약</h4>
-                <div className="text-[10px] text-slate-400 mt-0.5">총 예산 ${totalBudget.toLocaleString()}원 | 총 지출 ${totalSpent.toLocaleString()}원</div>
-              </div>
-              <div className="text-right">
-                <span className="text-[10px] font-black text-slate-400 mr-2">
-                  ${totalRemaining >= 0 ? '총 남은예산' : '총 예산초과'}
-                </span>
-                <span className=${`font-mono text-xl sm:text-3xl font-black ${totalRemaining >= 0 ? 'text-indigo-600' : 'text-red-500'}`}>
-                  ${Math.abs(totalRemaining).toLocaleString()}원
-                </span>
-              </div>
-            </div>
-          </div>
-        `}
-      </div>
-
-      <${Modal} isOpen=${isEditModalOpen} onClose=${() => setIsEditModalOpen(false)} title="${targetMonth} 예산 수정" maxWidth="max-w-4xl" zIndex="z-[110]">
-        <div className="space-y-4">
-          <div className="text-xs text-slate-500 bg-slate-50 p-3 rounded-xl border border-slate-100 mb-2 font-medium leading-relaxed">
-            각 비용 계정과목의 한 달 예산을 설정하세요. 여기에 명시하지 않은 모든 비용 항목은 자동 계산되어 <strong>기타비용</strong>에 합산됩니다.
-          </div>
-
-          <div className="max-h-[50vh] overflow-y-auto modal-scroll pr-2 space-y-2 pb-2">
-            ${editRows.map((row, idx) => html`
-              <div key=${idx} className="flex gap-2 items-center animate-in slide-in-from-left-2">
-                <button
-                  onClick=${() => setActiveBudgetPicker({ index: idx })}
-                  className="flex-1 p-2.5 rounded-xl bg-slate-50 text-xs font-bold border border-slate-200 text-left truncate hover:bg-indigo-50 hover:border-indigo-200 transition-all text-slate-700"
-                >
-                  ${getAccountName(row.accountId)}
-                </button>
-                <div className="relative w-40 sm:w-48">
-                  <input
-                    type="number"
-                    className="w-full p-2.5 pr-8 rounded-xl border border-slate-200 outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100 transition-all text-xs sm:text-sm font-bold text-slate-700 bg-white text-right font-mono"
-                    placeholder="0"
-                    value=${row.amount || ''}
-                    onChange=${(e) => handleRowAmountChange(idx, e.target.value)}
-                  />
-                  <span className="absolute right-3.5 top-1/2 -translate-y-1/2 text-xs font-bold text-slate-400">원</span>
-                </div>
-                <button
-                  onClick=${() => handleRemoveRow(idx)}
-                  className="text-slate-300 hover:text-red-500 p-2.5 transition-colors shrink-0"
-                >
-                  <${TrashIcon} />
-                </button>
-              </div>
-            `)}
-
-            <button
-              onClick=${handleAddRow}
-              className="w-full p-3 text-xs font-bold text-indigo-600 border border-dashed border-indigo-200 rounded-xl hover:bg-indigo-50 transition-all flex items-center justify-center gap-2"
-            >
-              <i data-lucide="plus-circle" className="w-4 h-4"></i> 행 추가
-            </button>
-
-            <div className="border-t border-slate-100 pt-3 mt-3">
-              <div className="flex items-center gap-2 p-3 bg-indigo-50/40 border border-indigo-100/50 rounded-xl">
-                <span className="flex-1 font-black text-xs sm:text-sm text-indigo-700">기타비용 (예산 미지정 항목 공통 예산)</span>
-                <div className="relative w-40 sm:w-48">
-                  <input
-                    type="number"
-                    className="w-full p-2.5 pr-8 rounded-xl border border-indigo-200 outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100 transition-all text-xs sm:text-sm font-black text-indigo-700 bg-white text-right font-mono"
-                    placeholder="0"
-                    value=${editOtherAmount || ''}
-                    onChange=${(e) => setEditOtherAmount(Number(e.target.value) || 0)}
-                  />
-                  <span className="absolute right-3.5 top-1/2 -translate-y-1/2 text-xs font-black text-indigo-400">원</span>
-                </div>
-                <div className="w-11 shrink-0"></div>
-              </div>
-            </div>
-          </div>
-
-          <div className="bg-slate-50 p-4 rounded-xl border border-slate-100 flex items-center justify-between">
-            <span className="font-extrabold text-sm text-slate-600">총 예산 합계</span>
-            <span className="font-mono font-black text-base sm:text-lg text-indigo-600">${editTotal.toLocaleString()}원</span>
-          </div>
-
-          <div className="flex gap-3 justify-end pt-3">
-            <${Button} variant="secondary" onClick=${() => setIsEditModalOpen(false)}>취소<//>
-            <${Button} variant="primary" onClick=${handleSave}>저장<//>
           </div>
         </div>
-      <//>
-
-      <${Modal} isOpen=${activeBudgetPicker !== null} onClose=${() => setActiveBudgetPicker(null)} title="예산 설정 계정과목 선택" maxWidth="max-w-4xl" zIndex="z-[160]">
-        <${AccountGridPicker} accounts=${accounts} onPick=${handleBudgetAccountPick} allowedCategories=${['expenses']} />
-      <//>
-    </div>`;
-};
-
-// --- App Component ---
-const App = () => {
-  const { data, setData, loading, error, getAccountById, saveTransaction, deleteTransaction, saveSettingsData, saveBudget, flatAccounts, reload } = useAccounting();
-  
-  const [isDirty, setIsDirty] = useState(false);
-  const [currentView, setCurrentView] = useState('CALENDAR');
-  const [isSidebarOpen, setIsSidebarOpen] = useState(window.innerWidth > 1024);
-  const [isSettingsModalOpen, setIsSettingsModalOpen] = useState(false);
-  const [settingsTab, setSettingsTab] = useState('equity');
-  const [isEntryModalOpen, setIsEntryModalOpen] = useState(false);
-  const [editingTransaction, setEditingTransaction] = useState(null);
-
-  const [statusMessage, setStatusMessage] = useState(null);
-  const [confirmDialog, setConfirmDialog] = useState(null);
-  const [activePicker, setActivePicker] = useState(null);
-
-  const [standardDate, setStandardDate] = useState(new Date().toISOString().split('T')[0]);
-  const [editRange, setEditRange] = useState({
-    start: new Date(new Date().getFullYear(), new Date().getMonth(), 1).toISOString().split('T')[0],
-    end: new Date().toISOString().split('T')[0]
-  });
-
-  const [entryRows, setEntryRows] = useState({
-    date: new Date().toISOString().split('T')[0],
-    debits: [{ accountId: '', amount: 0 }],
-    credits: [{ accountId: '', amount: 0 }],
-    memo: ''
-  });
-
-  const [addingToCategory, setAddingToCategory] = useState(null);
-  const [draggedAccountId, setDraggedAccountId] = useState(null);
-  const [searchTerm, setSearchTerm] = useState('');
-  const [searchDateRange, setSearchDateRange] = useState({ start: '', end: '' });
-  const [isSavingEntry, setIsSavingEntry] = useState(false);
-
-  useEffect(() => { if (statusMessage) { const t = setTimeout(() => setStatusMessage(null), 3000); return () => clearTimeout(t); } }, [statusMessage]);
-  useEffect(() => { setTimeout(() => lucide.createIcons(), 50); });
-
-  useEffect(() => {
-    const handleVisibilityChange = async () => {
-      if (document.visibilityState === 'visible') {
-        if (typeof google === 'undefined') return;
-        const timeoutPromise = new Promise((_, reject) =>
-          setTimeout(() => reject(new Error('Ping Timeout')), 3000)
-        );
-        const pingPromise = new Promise((resolve, reject) => {
-          google.script.run
-            .withSuccessHandler(resolve)
-            .withFailureHandler(reject)
-            .ping();
-        });
-        try {
-          await Promise.race([pingPromise, timeoutPromise]);
-          console.log('GAS Connection health check: OK');
-        } catch (e) {
-          console.warn('GAS Connection health check failed. Reloading...', e);
-          window.location.reload();
-        }
-      }
+      `;
     };
-    document.addEventListener('visibilitychange', handleVisibilityChange);
-    return () => {
-      document.removeEventListener('visibilitychange', handleVisibilityChange);
-    };
-  }, []);
 
-  const initialSetup = data.initialSetup;
-  const accounts = data.accounts;
-  const transactions = data.transactions;
+    // --- 메인 App 컴포넌트 ---
+    const App = () => {
+      const [view, setView] = useState('monthly');
+      const [items, setItems] = useState([]);
+      const [currentDate, setCurrentDate] = useState(new Date());
+      const [isSidebarOpen, setIsSidebarOpen] = useState(window.innerWidth >= 768);
+      const [isEditorOpen, setIsEditorOpen] = useState(false);
+      const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+      const [isLoading, setIsLoading] = useState(true);
+      const [isSyncing, setIsSyncing] = useState(false);
+      const [editingItem, setEditingItem] = useState(null);
+      const [viewingDate, setViewingDate] = useState(null);
+      
+      const [errorMsg, setErrorMsg] = useState("");
+      const [toastData, setToastData] = useState(null);
+      const [isDeleteConfirmOpen, setIsDeleteConfirmOpen] = useState(false);
+      const syncTimeoutRef = useRef(null);
 
-  const setupTotalDebits = useMemo(() => (initialSetup.debits || []).reduce((s, d) => s + Number(d.amount || 0), 0), [initialSetup.debits]);
-  const setupTotalOtherCredits = useMemo(() => (initialSetup.credits || []).reduce((s, c) => s + Number(c.amount || 0), 0), [initialSetup.credits]);
-  const calculatedInitialCapital = useMemo(() => setupTotalDebits - setupTotalOtherCredits, [setupTotalDebits, setupTotalOtherCredits]);
+      const [settings, setSettings] = useState({ botToken: '', chatId: '', notificationHour: '08' });
+      const [connectionStatus, setConnectionStatus] = useState('CONNECTED'); // CONNECTED, DISCONNECTED, RECONNECTING
 
-  const yearStartDate = useMemo(() => `${standardDate.split('-')[0]}-01-01`, [standardDate]);
-  const allBsTransactions = useMemo(() => transactions.filter(t => t.date <= standardDate), [transactions, standardDate]);
-  const performanceTransactions = useMemo(() => transactions.filter(t => t.date >= yearStartDate && t.date <= standardDate), [transactions, yearStartDate, standardDate]);
+      const showToast = useCallback((msg, isError = false) => {
+        setToastData({ msg, isError });
+        setTimeout(() => setToastData(null), 3000);
+      }, []);
 
-  const accountBalances = useMemo(() => {
-    const balances = {};
-    flatAccounts.forEach(a => balances[a.id] = 0);
-    balances['closing_temp'] = 0;
-    (initialSetup.debits || []).forEach(d => { if (d.accountId) { balances[d.accountId] = (balances[d.accountId] || 0) + Number(d.amount || 0); } });
-    (initialSetup.credits || []).forEach(c => { if (c.accountId) { balances[c.accountId] = (balances[c.accountId] || 0) - Number(c.amount || 0); } });
-    allBsTransactions.forEach(t => {
-      t.debits.forEach(d => { balances[d.accountId] = (balances[d.accountId] || 0) + Number(d.amount || 0); });
-      t.credits.forEach(c => { balances[c.accountId] = (balances[c.accountId] || 0) - Number(c.amount || 0); });
-    });
-    return balances;
-  }, [allBsTransactions, accounts, initialSetup, flatAccounts]);
-
-  const revenueHierarchy = useMemo(() => {
-    const subtypes = ['fixed', 'variable'];
-    const groups = subtypes.map(st => {
-      const accs = accounts.revenue.filter(a => (a.subtype || 'fixed') === st).map(acc => {
-        let amt = 0;
-        performanceTransactions.forEach(t => { t.credits.forEach(c => { if(c.accountId === acc.id) amt += Number(c.amount); }); t.debits.forEach(d => { if(d.accountId === acc.id) amt -= Number(d.amount); }); });
-        return { name: acc.name, amount: amt };
-      }).filter(a => a.amount !== 0);
-      return { label: st === 'fixed' ? '고정 항목' : '변동 항목', subtotal: accs.reduce((s, a) => s + a.amount, 0), accounts: accs };
-    });
-    return { total: groups.reduce((s, g) => s + g.subtotal, 0), groups };
-  }, [performanceTransactions, accounts]);
-
-  const expensesHierarchy = useMemo(() => {
-    const subtypes = ['fixed', 'variable'];
-    const groups = subtypes.map(st => {
-      const accs = accounts.expenses.filter(a => (a.subtype || 'fixed') === st).map(acc => {
-        let amt = 0;
-        performanceTransactions.forEach(t => { t.debits.forEach(d => { if(d.accountId === acc.id) amt += Number(d.amount); }); t.credits.forEach(c => { if(c.accountId === acc.id) amt -= Number(c.amount); }); });
-        return { name: acc.name, amount: amt };
-      }).filter(a => a.amount !== 0);
-      return { label: st === 'fixed' ? '고정 항목' : '변동 항목', subtotal: accs.reduce((s, a) => s + a.amount, 0), accounts: accs };
-    });
-    return { total: groups.reduce((s, g) => s + g.subtotal, 0), groups };
-  }, [performanceTransactions, accounts]);
-
-  const reportNetIncome = useMemo(() => revenueHierarchy.total - expensesHierarchy.total, [revenueHierarchy, expensesHierarchy]);
-
-  const unsettledNetIncome = useMemo(() => {
-    const revBal = accounts.revenue.reduce((sum, acc) => {
-        const bal = accountBalances[acc.id] || 0;
-        return sum + (bal < 0 ? Math.abs(bal) : -bal);
-    }, 0);
-    const expBal = accounts.expenses.reduce((sum, acc) => {
-        const bal = accountBalances[acc.id] || 0;
-        return sum + (bal > 0 ? bal : -Math.abs(bal));
-    }, 0);
-    return revBal - expBal;
-  }, [accountBalances, accounts]);
-
-  const totalAssets = accounts.assets.reduce((sum, acc) => sum + (accountBalances[acc.id] || 0), 0);
-  const totalLiabilitiesOnly = accounts.liabilities.filter(a => a.name !== '이익잉여금').reduce((sum, acc) => sum + Math.abs(accountBalances[acc.id] || 0), 0);
-  
-  const retainedEarningsAcc = flatAccounts.find(a => a.name === '이익잉여금');
-  const retainedEarningsId = retainedEarningsAcc ? retainedEarningsAcc.id : 'e1';
-  const retainedEarningsBalance = Math.abs(accountBalances[retainedEarningsId] || 0);
-  const retainedEarningsRow = useMemo(() => (initialSetup.credits || []).find(c => String(c.accountId) === String(retainedEarningsId)), [initialSetup.credits, retainedEarningsId]);
-  const retainedEarningsAmount = retainedEarningsRow ? retainedEarningsRow.amount : 0;
-  const currentEquity = calculatedInitialCapital + (accountBalances[retainedEarningsId] < 0 ? Math.abs(accountBalances[retainedEarningsId]) : -accountBalances[retainedEarningsId]) + unsettledNetIncome;
-
-  const totalDebitSum = useMemo(() => (entryRows.debits || []).reduce((s, r) => s + Number(r.amount || 0), 0), [entryRows.debits]);
-  const totalCreditSum = useMemo(() => (entryRows.credits || []).reduce((s, r) => s + Number(r.amount || 0), 0), [entryRows.credits]);
-
-  const handleSyncSettings = async () => {
-    await saveSettingsData(initialSetup, accounts);
-    setIsDirty(false); setStatusMessage({ type: 'success', text: '설정 저장 완료' });
-  };
-
-  const handleAddAccount = (category, name) => {
-    if (!name.trim()) return;
-    setData(prev => {
-      const newArr = [...prev.accounts[category], { id: Date.now().toString(), name: name.trim(), subtype: 'fixed' }];
-      newArr.sort((a, b) => a.name.localeCompare(b.name, 'ko-KR'));
-      return { ...prev, accounts: { ...prev.accounts, [category]: newArr } };
-    });
-    setIsDirty(true); setAddingToCategory(null);
-  };
-
-  const handleUpdateAccountName = (category, id, name) => {
-    setData(prev => {
-      const newArr = prev.accounts[category].map(a => String(a.id) === String(id) ? { ...a, name: name.trim() } : a);
-      newArr.sort((a, b) => a.name.localeCompare(b.name, 'ko-KR'));
-      return { ...prev, accounts: { ...prev.accounts, [category]: newArr } };
-    });
-    setIsDirty(true);
-  };
-
-  const handleDeleteAccount = (category, id) => {
-    setConfirmDialog({
-      title: '삭제 확인', message: '해당 계정과목을 삭제하시겠습니까?',
-      onConfirm: () => {
-        setData(prev => ({ ...prev, accounts: { ...prev.accounts, [category]: prev.accounts[category].filter(a => String(a.id) !== String(id)) } }));
-        setIsDirty(true); setConfirmDialog(null);
-      }
-    });
-  };
-
-  const handleDeleteTransactionWrapper = () => {
-    if (!editingTransaction) return;
-    setConfirmDialog({
-      title: '전표 삭제', message: '이 거래를 삭제하시겠습니까?',
-      onConfirm: async () => {
-        await deleteTransaction(editingTransaction.id);
-        setIsEntryModalOpen(false); setEditingTransaction(null); setConfirmDialog(null);
-      }
-    });
-  };
-
-  const handleSaveEntry = async () => {
-    if (totalDebitSum !== totalCreditSum || totalDebitSum === 0) return;
-    setIsSavingEntry(true);
-    try {
-      const newTransaction = {
-        id: editingTransaction ? editingTransaction.id : `T-${Date.now()}`,
-        date: entryRows.date,
-        debits: entryRows.debits.filter(d => d.accountId && d.amount > 0),
-        credits: entryRows.credits.filter(c => c.accountId && c.amount > 0),
-        memo: entryRows.memo || '거래 내역'
-      };
-      await saveTransaction(newTransaction);
-      setIsEntryModalOpen(false); setEditingTransaction(null);
-      setEntryRows({ date: new Date().toISOString().split('T')[0], debits: [{ accountId: '', amount: 0 }], credits: [{ accountId: '', amount: 0 }], memo: '' });
-    } finally {
-      setIsSavingEntry(false);
-    }
-  };
-
-  const handleClosing = () => {
-    const closingDebits = [];
-    const closingCredits = [];
-    let totalRevToClear = 0;
-    let totalExpToClear = 0;
-
-    accounts.revenue.forEach(acc => {
-      const bal = accountBalances[acc.id] || 0;
-      if (bal !== 0) {
-        if (bal < 0) {
-          const amt = Math.abs(bal);
-          closingDebits.push({ accountId: acc.id, amount: amt });
-          totalRevToClear += amt;
-        } else {
-          const amt = bal;
-          closingCredits.push({ accountId: acc.id, amount: amt });
-          totalRevToClear -= amt;
-        }
-      }
-    });
-
-    accounts.expenses.forEach(acc => {
-      const bal = accountBalances[acc.id] || 0;
-      if (bal !== 0) {
-        if (bal > 0) {
-          const amt = bal;
-          closingCredits.push({ accountId: acc.id, amount: amt });
-          totalExpToClear += amt;
-        } else {
-          const amt = Math.abs(bal);
-          closingDebits.push({ accountId: acc.id, amount: amt });
-          totalExpToClear -= amt;
-        }
-      }
-    });
-
-    if (totalRevToClear === 0 && totalExpToClear === 0) {
-      setStatusMessage({ type: 'error', text: '결산할 잔액이 없습니다.' });
-      return;
-    }
-
-    const netIncome = totalRevToClear - totalExpToClear;
-
-    setConfirmDialog({
-      title: '장부 결산 실행',
-      message: `${standardDate} 기준으로 수익과 비용의 모든 잔액을 정리하시겠습니까? (순이익 ${netIncome.toLocaleString()}원)`,
-      onConfirm: async () => {
-        const ts = Date.now();
-        const entry1_debits = [...closingDebits];
-        const entry1_credits = [...closingCredits];
-        if (netIncome > 0) { entry1_credits.push({ accountId: 'closing_temp', amount: netIncome }); } 
-        else if (netIncome < 0) { entry1_debits.push({ accountId: 'closing_temp', amount: Math.abs(netIncome) }); }
-
-        const entry1 = { id: `CLOSE-A-${ts}`, date: standardDate, debits: entry1_debits, credits: entry1_credits, memo: `[결산-1] ${standardDate} 수익비용 잔액 집계` };
-
-        const entry2_debits = [];
-        const entry2_credits = [];
-        if (netIncome > 0) {
-          entry2_debits.push({ accountId: 'closing_temp', amount: netIncome });
-          entry2_credits.push({ accountId: retainedEarningsId, amount: netIncome });
-        } else if (netIncome < 0) {
-          const loss = Math.abs(netIncome);
-          entry2_debits.push({ accountId: retainedEarningsId, amount: loss });
-          entry2_credits.push({ accountId: 'closing_temp', amount: loss });
+      const checkConnection = useCallback((silently = false) => {
+        if (typeof google === 'undefined') {
+          setConnectionStatus('CONNECTED');
+          return;
         }
 
-        await saveTransaction(entry1);
-        if (netIncome !== 0) {
-          await saveTransaction({ id: `CLOSE-B-${ts}`, date: standardDate, debits: entry2_debits, credits: entry2_credits, memo: `[결산-2] ${standardDate} 순이익 이익잉여금 대체` });
+        if (!silently) {
+          setConnectionStatus('RECONNECTING');
         }
-        setConfirmDialog(null); setStatusMessage({ type: 'success', text: '결산이 완료되었습니다.' });
-      }
-    });
-  };
+        
+        let isResolved = false;
 
-  const handleUpdateEntryRow = (type, index, field, value) => {
-    setEntryRows(prev => {
-      const newRows = [...prev[type]];
-      newRows[index] = { ...newRows[index], [field]: value };
-      return { ...prev, [type]: newRows };
-    });
-  };
+        const timeoutId = setTimeout(() => {
+          if (!isResolved) {
+            setConnectionStatus('DISCONNECTED');
+            if (!silently) {
+              showToast("서버 응답 지연: 연결이 해제되었습니다.", true);
+            }
+          }
+        }, 3000);
 
-  const handleAccountPick = (id) => {
-    if (!activePicker) return;
-    const { type, index } = activePicker;
-    if (type === 'setupDebits') setData(prev => { const n = [...prev.initialSetup.debits]; n[index].accountId = id; return { ...prev, initialSetup: { ...prev.initialSetup, debits: n } }; });
-    else if (type === 'setupCredits') setData(prev => { const n = [...prev.initialSetup.credits]; n[index].accountId = id; return { ...prev, initialSetup: { ...prev.initialSetup, credits: n } }; });
-    else handleUpdateEntryRow(type, index, 'accountId', id);
-    setActivePicker(null); setIsDirty(true);
-  };
-
-  const handleDragOver = (e) => e.preventDefault();
-  const handleAccountDragStart = (id) => setDraggedAccountId(id);
-  const handleSubtypeDrop = (subtype, type) => {
-    if (!draggedAccountId) return;
-    setData(prev => ({ ...prev, accounts: { ...prev.accounts, [type]: prev.accounts[type].map(a => String(a.id) === String(draggedAccountId) ? { ...a, subtype } : a) } }));
-    setIsDirty(true); setDraggedAccountId(null);
-  };
-
-  const filteredTxs = useMemo(() => {
-    if (!searchTerm && !searchDateRange.start && !searchDateRange.end) return [];
-    const term = searchTerm.toLowerCase();
-    return transactions.filter(t => {
-      if (searchDateRange.start && t.date < searchDateRange.start) return false;
-      if (searchDateRange.end && t.date > searchDateRange.end) return false;
-      if (!term) return true;
-      if (t.memo && t.memo.toLowerCase().includes(term)) return true;
-      if (t.date.includes(term)) return true;
-      const dMatch = t.debits.some(d => getAccountById(d.accountId)?.name.toLowerCase().includes(term));
-      const cMatch = t.credits.some(c => getAccountById(c.accountId)?.name.toLowerCase().includes(term));
-      return dMatch || cMatch;
-    }).sort((a,b) => b.date.localeCompare(a.date));
-  }, [transactions, searchTerm, searchDateRange, getAccountById]);
-
-  if (error) throw new Error(error);
-
-  return html`
-    <div className="flex flex-col md:flex-row h-screen bg-slate-50 overflow-hidden text-slate-900">
-      ${loading && html`<div className="loading-overlay"><div className="w-10 h-10 border-4 border-indigo-600 border-t-transparent rounded-full animate-spin mb-4"></div><p className="font-bold text-indigo-600 text-sm">데이터 동기화 중...</p></div>`}
-      ${statusMessage && html`<div className="fixed top-4 right-4 z-[300] p-4 rounded-2xl shadow-2xl border bg-emerald-50 border-emerald-200 text-emerald-800 font-bold text-sm">✓ ${statusMessage.text}</div>`}
-
-      <${Modal} isOpen=${confirmDialog !== null} onClose=${() => setConfirmDialog(null)} title=${confirmDialog?.title || '확인'} maxWidth="max-w-md" zIndex="z-[200]">
-        <div className="space-y-6 text-center">
-          <p className="font-medium text-slate-600 leading-relaxed text-sm">${confirmDialog?.message}</p>
-          <div className="flex gap-3 justify-center pb-2">
-            <${Button} variant="secondary" onClick=${() => setConfirmDialog(null)}>취소<//>
-            <${Button} onClick=${confirmDialog?.onConfirm}>확인<//>
-          </div>
-        </div>
-      <//>
-
-      <aside className=${`sidebar-transition bg-white border-r border-slate-200 shrink-0 flex flex-col overflow-hidden fixed md:relative z-40 shadow-xl md:shadow-none h-full ${isSidebarOpen ? 'w-64' : 'w-0 md:w-20'}`}>
-        <div className="p-6 flex items-center gap-3">
-          <div className="bg-indigo-600 p-2 rounded-xl text-white shadow-lg shrink-0"><i data-lucide="wallet"></i></div>
-          ${isSidebarOpen && html`<span className="font-bold text-xl animate-in fade-in">DoubleBook</span>`}
-        </div>
-        <nav className="flex-1 px-3 space-y-1 mt-4">
-          ${[
-            { id: 'CALENDAR', label: '캘린더', icon: 'calendar-days' },
-            { id: 'BS', label: '재무상태표', icon: 'layout-dashboard' },
-            { id: 'IS', label: '손익계산서', icon: 'pie-chart' },
-            { id: 'GL', label: '총계정원장', icon: 'book-open' },
-            { id: 'EXPENSE_REPORT', label: '월간손익명세', icon: 'trending-up' },
-            { id: 'BUDGET', label: '월별예산', icon: 'piggy-bank' }
-          ].map(nav => html`
-            <button key=${nav.id} onClick=${() => { setCurrentView(nav.id); if(window.innerWidth < 768) setIsSidebarOpen(false); }} className=${`w-full flex items-center gap-3 p-3 rounded-xl transition-all ${currentView === nav.id ? 'bg-indigo-600 text-white shadow-md' : 'hover:bg-slate-100 text-slate-500'}`}>
-              <i data-lucide=${nav.icon} className="shrink-0"></i>
-              ${isSidebarOpen && html`<span className="font-medium animate-in fade-in whitespace-nowrap">${nav.label}</span>`}
-            </button>
-          `)}
-        </nav>
-        <div className="p-3 border-t text-slate-800 space-y-2 mb-4">
-          <button onClick=${() => { setIsSettingsModalOpen(true); if(window.innerWidth < 768) setIsSidebarOpen(false); }} className="w-full flex items-center gap-3 p-3 rounded-xl hover:bg-slate-100 font-bold transition-colors">
-            <i data-lucide="settings" className="shrink-0"></i>
-            ${isSidebarOpen && html`<span className="animate-in fade-in whitespace-nowrap">설정</span>`}
-          </button>
-        </div>
-      </aside>
-
-      ${isSidebarOpen && html`<div onClick=${() => setIsSidebarOpen(false)} className="md:hidden fixed inset-0 bg-black/40 z-30 backdrop-blur-sm animate-in fade-in"></div>`}
-
-      <main className="flex-1 flex flex-col overflow-hidden relative">
-        <header className="h-14 sm:h-16 bg-white border-b flex items-center justify-between px-3 sm:px-6 shrink-0 z-10 shadow-sm text-slate-800">
-          <div className="flex items-center gap-3 sm:gap-6">
-            <button onClick=${() => setIsSidebarOpen(!isSidebarOpen)} className="p-2 hover:bg-slate-100 rounded-lg text-slate-500"><i data-lucide=${isSidebarOpen ? 'chevron-left' : 'menu'} className="w-5 h-5"></i></button>
-            <div className="flex items-center gap-1 sm:gap-3 bg-slate-50 px-2 sm:px-3 py-1.5 rounded-xl border border-slate-100 text-slate-700 font-bold">
-              <i data-lucide="calendar" className="text-indigo-500 w-3 h-3 sm:w-4 sm:h-4"></i>
-              <input type="date" className="bg-transparent border-none outline-none text-[11px] sm:text-sm font-bold w-24 sm:w-32 cursor-pointer text-slate-700" value=${standardDate} onChange=${(e) => setStandardDate(e.target.value)} />
-            </div>
-          </div>
-          <div className="flex items-center gap-2">
-            <${Button} variant="secondary" onClick=${handleClosing} className="text-[11px] sm:text-sm px-3 sm:px-5">
-              <i data-lucide="calculator" className="w-3.5 h-3.5 sm:w-4 sm:h-4"></i><span>결산 실행</span>
-            <//>
-            <${Button} onClick=${() => { setEntryRows({ date: standardDate, debits: [{ accountId: '', amount: 0 }], credits: [{ accountId: '', amount: 0 }], memo: '' }); setIsEntryModalOpen(true); }} className="text-[11px] sm:text-sm px-3 sm:px-5">
-              <i data-lucide="plus-circle" className="w-3.5 h-3.5 sm:w-4 sm:h-4"></i><span>거래 입력</span>
-            <//>
-          </div>
-        </header>
-
-        <div className="flex-1 overflow-y-auto p-3 sm:p-8 pb-24">
-          ${currentView === 'CALENDAR' && html`
-            <${MonthlyCalendar} 
-              accounts=${accounts} 
-              transactions=${transactions} 
-              getAccountById=${getAccountById} 
-              onEditTransaction=${(txId) => {
-                const tx = transactions.find(t => t.id === txId);
-                if(tx) { 
-                  setEditingTransaction(tx); 
-                  setEntryRows({ date: tx.date, debits: tx.debits, credits: tx.credits, memo: tx.memo }); 
-                  setIsEntryModalOpen(true); 
+        google.script.run
+          .withSuccessHandler((res) => {
+            isResolved = true;
+            clearTimeout(timeoutId);
+            if (res && res.success) {
+              setConnectionStatus(prev => {
+                if (prev === 'DISCONNECTED') {
+                  showToast("서버 연결이 복구되었습니다!");
                 }
-              }} 
-            />
+                return 'CONNECTED';
+              });
+            } else {
+              setConnectionStatus('DISCONNECTED');
+            }
+          })
+          .withFailureHandler((err) => {
+            isResolved = true;
+            clearTimeout(timeoutId);
+            setConnectionStatus('DISCONNECTED');
+          })
+          .ping();
+      }, [showToast]);
+
+      const todayStr = useMemo(() => formatDate(new Date()), []);
+
+      const defaultForm = {
+        title: '', date: formatDate(new Date()), endDate: formatDate(new Date()), time: '', location: '', description: '', type: 'Schedule', importance: 'None', status: '', category: 'None', recurrence: 'none'
+      };
+      const [formData, setFormData] = useState(defaultForm);
+
+      useEffect(() => {
+        if (typeof google !== 'undefined') {
+          google.script.run.withSuccessHandler(res => {
+            let success = false;
+            let data = [];
+            let errorMsg = "알 수 없는 오류";
+
+            if (res) {
+              if (Array.isArray(res)) {
+                success = true;
+                data = res;
+              } else if (typeof res === 'object') {
+                if (res.hasOwnProperty('success')) {
+                  success = res.success;
+                  data = Array.isArray(res.data) ? res.data : [];
+                  errorMsg = res.message || errorMsg;
+                } else {
+                  success = true;
+                  data = [res];
+                }
+              }
+            }
+
+            if (success) {
+              setItems(data.map(it => ({ 
+                ...it, 
+                date: formatDate(it.date),
+                endDate: it.endDate ? formatDate(it.endDate) : formatDate(it.date),
+                time: formatTimeOnly(it.time) 
+              })));
+            } else {
+              showToast("데이터 로드 실패: " + errorMsg, true);
+            }
+            setIsLoading(false);
+          }).withFailureHandler(err => {
+            showToast("통신 에러: " + err.message, true);
+            setIsLoading(false);
+          }).loadData();
+          
+          google.script.run.withSuccessHandler(res => {
+            if (res) {
+              if (res.success && res.data) {
+                setSettings(res.data);
+              } else if (res.botToken && res.chatId && res.notificationHour) {
+                setSettings(res);
+              }
+            }
+          }).getSettings();
+        } else {
+          // 로컬 데모 모드: localStorage에서 데이터 로드
+          const localData = localStorage.getItem('planner_items');
+          if (localData) {
+            try {
+              setItems(JSON.parse(localData));
+            } catch (e) {
+              console.error(e);
+            }
+          } else {
+            // 데모용 샘플 데이터 추가
+            const sampleData = [
+              {
+                id: "demo1",
+                title: "프로젝트 기획 회의",
+                date: formatDate(new Date()),
+                endDate: formatDate(new Date(Date.now() + 2 * 24 * 60 * 60 * 1000)), // 3일 일정
+                time: "10:00",
+                location: "회의실 A",
+                description: "신규 기능 기획 및 일정 조율",
+                type: "Schedule",
+                importance: "!!",
+                status: "",
+                category: "Work"
+              },
+              {
+                id: "demo2",
+                title: "피트니스 운동",
+                date: formatDate(new Date()),
+                endDate: formatDate(new Date()),
+                time: "19:00",
+                location: "헬스장",
+                description: "유산소 및 근력 운동",
+                type: "Schedule",
+                importance: "None",
+                status: "",
+                category: "Exercise"
+              }
+            ];
+            setItems(sampleData);
+            localStorage.setItem('planner_items', JSON.stringify(sampleData));
+          }
+          const localSettings = localStorage.getItem('planner_settings');
+          if (localSettings) {
+            try { setSettings(JSON.parse(localSettings)); } catch(e){}
+          }
+          setIsLoading(false);
+        }
+      }, []);
+
+      useEffect(() => {
+        const handleFocus = () => {
+          checkConnection();
+        };
+
+        const handleVisibilityChange = () => {
+          if (document.visibilityState === 'visible') {
+            checkConnection();
+          }
+        };
+
+        window.addEventListener('focus', handleFocus);
+        document.addEventListener('visibilitychange', handleVisibilityChange);
+
+        // 최초 1회 체크
+        checkConnection();
+
+        return () => {
+          window.removeEventListener('focus', handleFocus);
+          document.removeEventListener('visibilitychange', handleVisibilityChange);
+        };
+      }, [checkConnection]);
+
+      useEffect(() => {
+        if (connectionStatus !== 'DISCONNECTED') return;
+
+        const attemptReconnect = () => {
+          if (document.hidden) return; // 탭이 백그라운드에 있으면 작동 중지
+          checkConnection(true); // 조용히 자동 재연결 시도
+        };
+
+        const intervalId = setInterval(attemptReconnect, 5000);
+
+        return () => {
+          clearInterval(intervalId);
+        };
+      }, [connectionStatus, checkConnection]);
+
+      // 백그라운드 동기화 (Optimistic UI)
+      const triggerSync = (newItems) => {
+        if (syncTimeoutRef.current) clearTimeout(syncTimeoutRef.current);
+        
+        // 가상 아이템은 클라우드에 저장하지 않도록 필터링
+        const physicalItems = newItems.filter(it => !it.isVirtual);
+        
+        syncTimeoutRef.current = setTimeout(() => {
+          setIsSyncing(true);
+          if (typeof google !== 'undefined') {
+            google.script.run.withSuccessHandler((res) => {
+              setIsSyncing(false);
+              const isSuccess = res === "Success" || (res && res.success);
+              if (!isSuccess) {
+                showToast("동기화 실패: " + (res && res.message ? res.message : "알 수 없는 오류"), true);
+              }
+            }).withFailureHandler(err => {
+              setIsSyncing(false);
+              showToast("서버 오류: " + err.message, true);
+            }).saveData(physicalItems);
+          } else {
+            localStorage.setItem('planner_items', JSON.stringify(physicalItems));
+            setTimeout(() => { setIsSyncing(false); showToast("로컬 브라우저에 저장됨"); }, 800);
+          }
+        }, 1000);
+      };
+
+      const updateAndSync = (newItems) => {
+        setItems(newItems);
+        triggerSync(newItems);
+      };
+
+      // 가상 일정(반복 일정) 확장 로직
+      const displayItems = useMemo(() => {
+        const result = [];
+        const today = new Date(currentDate.getFullYear(), currentDate.getMonth(), 1);
+        const startRange = new Date(today.getFullYear(), today.getMonth() - 2, 1);
+        const endRange = new Date(today.getFullYear(), today.getMonth() + 2, 0);
+
+        items.forEach(it => {
+          if (it.isVirtual) return; // 기존 물리 항목만 처리
+          
+          result.push(it);
+
+          if (it.recurrence && it.recurrence !== 'none') {
+            let current = new Date(it.date);
+            while (true) {
+              if (it.recurrence === 'daily') current.setDate(current.getDate() + 1);
+              else if (it.recurrence === 'weekly') current.setDate(current.getDate() + 7);
+              else if (it.recurrence === 'monthly') current.setMonth(current.getMonth() + 1);
+
+              if (current > endRange) break;
+
+              if (current >= startRange) {
+                const dateStr = formatDate(current);
+                const virtualId = `${it.id}_${dateStr}`;
+                // 물리적 예외 처리 항목이 이미 존재하는지 확인
+                const exceptionExists = items.some(ex => ex.id === virtualId || (ex.originalId === it.id && ex.date === dateStr));
+                if (!exceptionExists) {
+                  result.push({
+                    ...it,
+                    id: virtualId,
+                    date: dateStr,
+                    isVirtual: true,
+                    originalId: it.id
+                  });
+                }
+              }
+            }
+          }
+        });
+        return result;
+      }, [items, currentDate]);
+
+      const openEditor = (item = null) => {
+        setErrorMsg(""); setIsDeleteConfirmOpen(false);
+        if (item) { 
+          setEditingItem(item); 
+          setFormData({ ...item, endDate: item.endDate || item.date, time: formatTimeOnly(item.time) }); 
+        } else { 
+          setEditingItem(null); 
+          setFormData(defaultForm); 
+        }
+        setIsEditorOpen(true);
+      };
+
+      const saveItem = () => {
+        if (!formData.title || !formData.date) { setErrorMsg("Title과 Date는 필수 입력 항목입니다."); return; }
+        const actualEndDate = formData.endDate || formData.date;
+        if (actualEndDate < formData.date) { setErrorMsg("종료일은 시작일보다 빠를 수 없습니다."); return; }
+        if (formData.time && !/^([01]\d|2[0-3]):([0-5]\d)$/.test(formData.time)) { setErrorMsg("시간 형식이 올바르지 않습니다 (HH:mm)."); return; }
+        
+        const finalFormData = { ...formData, endDate: actualEndDate };
+        
+        let newItems;
+        if (editingItem) {
+          if (editingItem.isVirtual) {
+            // 가상 아이템을 수정할 경우 새로운 물리 항목 생성
+            newItems = [...items, { ...finalFormData, id: editingItem.id, isVirtual: false }];
+          } else {
+            // 원본 수정
+            newItems = items.map(it => it.id === editingItem.id ? { ...finalFormData, id: it.id, isVirtual: false } : it);
+          }
+        } else {
+          newItems = [...items, { ...finalFormData, id: Date.now().toString(), isVirtual: false }];
+        }
+        
+        updateAndSync(newItems);
+        setIsEditorOpen(false);
+      };
+
+      const confirmDelete = () => {
+        let newItems;
+        if (editingItem.isVirtual) {
+          // 가상 아이템 삭제(스킵) 시 예외를 생성해 status: 'DELETED'로 관리
+          newItems = [...items, { ...editingItem, status: 'DELETED', isVirtual: false }];
+        } else {
+          // 원본 삭제
+          newItems = items.filter(it => it.id !== editingItem.id);
+        }
+        updateAndSync(newItems);
+        setIsEditorOpen(false); 
+        setIsDeleteConfirmOpen(false);
+      };
+
+      const toggleHabitStatus = useCallback((id, virtualDate, originalId) => {
+        setItems(prevItems => {
+          let nextItems = [...prevItems];
+          if (originalId && virtualDate) { 
+            // 가상 항목을 토글하면 물리적 완료 항목 생성
+            const originalItem = prevItems.find(it => it.id === originalId);
+            if (originalItem) {
+              nextItems.push({
+                ...originalItem,
+                id: id,
+                date: virtualDate,
+                status: 'CHECK',
+                recurrence: 'none',
+                isVirtual: false,
+                originalId: originalId
+              });
+            }
+          } else {
+            // 물리 항목 토글
+            nextItems = nextItems.map(it => {
+              if (it.id === id) {
+                let nextStatus = it.status === '' ? 'CHECK' : it.status === 'CHECK' ? 'X' : '';
+                return { ...it, status: nextStatus };
+              }
+              return it;
+            });
+          }
+          triggerSync(nextItems); // 백그라운드 동기화
+          return nextItems;
+        });
+      }, []);
+
+      const [isTestingTelegram, setIsTestingTelegram] = useState(false);
+
+      const handleTestTelegram = () => {
+        if (!settings.botToken || !settings.chatId) {
+          showToast("Bot Token과 Chat ID를 입력해주세요.", true);
+          return;
+        }
+        setIsTestingTelegram(true);
+        if (typeof google !== 'undefined') {
+          google.script.run.withSuccessHandler((res) => {
+            setIsTestingTelegram(false);
+            if (res.success) {
+              showToast("텔레그램 메시지 전송 성공!");
+            } else {
+              showToast("전송 실패: " + res.message, true);
+            }
+          }).withFailureHandler(err => {
+            setIsTestingTelegram(false);
+            showToast("서버 오류: " + err.message, true);
+          }).testTelegram(settings.botToken, settings.chatId);
+        } else {
+          setTimeout(() => {
+            setIsTestingTelegram(false);
+            showToast("텔레그램 전송 테스트 성공 (데모)");
+          }, 1000);
+        }
+      };
+
+      const handleSaveSettings = () => {
+        setIsSyncing(true);
+        if (typeof google !== 'undefined') {
+          google.script.run.withSuccessHandler((res) => {
+            setIsSyncing(false);
+            if (res.success) {
+              setIsSettingsOpen(false);
+              showToast("설정이 저장되었습니다.");
+            } else {
+              showToast("설정 저장 실패: " + res.message, true);
+            }
+          }).withFailureHandler(err => {
+            setIsSyncing(false);
+            showToast("서버 오류: " + err.message, true);
+          }).saveSettings(settings);
+        } else {
+           localStorage.setItem('planner_settings', JSON.stringify(settings));
+           setTimeout(() => { setIsSyncing(false); setIsSettingsOpen(false); showToast("설정 적용 완료 (데모)"); }, 800);
+        }
+      };
+
+      const changeView = (v) => { setView(v); if (window.innerWidth < 768) setIsSidebarOpen(false); };
+
+      // DELETED 상태인 항목은 달력/주간 뷰에서 숨기기
+      const visibleDisplayItems = useMemo(() => displayItems.filter(it => it.status !== 'DELETED'), [displayItems]);
+
+      return html`
+        <div className="flex h-screen w-full overflow-hidden font-sans relative">
+          
+          ${isLoading && items.length === 0 && html`
+            <div className="fixed inset-0 z-[200] bg-white flex flex-col items-center justify-center">
+               <div className="w-16 h-16 border-4 border-blue-100 border-t-blue-600 rounded-full animate-spin mb-4"></div>
+               <p className="font-bold text-slate-400 tracking-widest animate-pulse uppercase text-xs">Connecting to Cloud...</p>
+            </div>
           `}
-          ${currentView === 'BS' && html`
-            <div className="max-w-6xl mx-auto flex flex-col lg:grid lg:grid-cols-2 lg:gap-px bg-slate-100 lg:rounded-3xl overflow-hidden lg:border shadow-lg rounded-2xl border border-slate-200 text-slate-800">
-              <div className="bg-white p-5 sm:p-8 border-b lg:border-none">
-                <h3 className="text-sm sm:text-xl font-black text-indigo-600 border-b-2 border-indigo-500 pb-2 mb-4 sm:mb-6 uppercase tracking-widest text-center">Assets</h3>
-                <div className="space-y-3 sm:space-y-4 min-h-[100px] sm:min-h-[250px]">
-                  ${accounts.assets.filter(acc => (accountBalances[acc.id] || 0) !== 0).map(acc => html`<div key=${acc.id} className="flex justify-between items-center"><span className="text-xs sm:text-base text-slate-600 font-medium">${acc.name}</span><span className="font-mono font-bold text-sm sm:text-lg">${(accountBalances[acc.id] || 0).toLocaleString()}원</span></div>`)}
-                </div>
-                <div className="mt-6 sm:mt-8 pt-4 border-t-2 border-slate-50 flex justify-between items-center font-black"><span className="text-xs sm:text-lg uppercase">Total Assets</span><span className="font-mono font-black text-lg sm:text-2xl text-indigo-600">${totalAssets.toLocaleString()}원</span></div>
-              </div>
-              <div className="bg-white p-5 sm:p-8 flex flex-col text-slate-800">
-                <div className="flex-1">
-                  <h3 className="text-sm sm:text-xl font-black text-red-500 border-b-2 border-red-500 pb-2 mb-4 sm:mb-6 uppercase tracking-widest text-center">Liabilities</h3>
-                  <div className="space-y-3 sm:space-y-4 mb-8 sm:mb-12">
-                    ${accounts.liabilities.filter(a => a.name !== '이익잉여금' && (accountBalances[a.id] || 0) !== 0).map(acc => html`<div key=${acc.id} className="flex justify-between items-center"><span className="text-xs sm:text-base text-slate-600 font-medium">${acc.name}</span><span className="font-mono font-bold text-sm sm:text-lg">${Math.abs(accountBalances[acc.id] || 0).toLocaleString()}원</span></div>`)}
-                  </div>
-                  <h3 className="text-[10px] sm:text-xs font-black text-emerald-600 border-b border-emerald-200 pb-2 mb-3 sm:mb-4 uppercase tracking-widest">Equity</h3>
-                  <div className="space-y-2 sm:space-y-3 font-bold">
-                    <div className="flex justify-between items-center text-[11px] sm:text-sm"><span>자본금</span><span className="font-mono">${calculatedInitialCapital.toLocaleString()}원</span></div>
-                    <div className="flex justify-between items-center bg-emerald-50 p-2 sm:p-3 rounded-xl border border-emerald-100 font-bold text-emerald-700"><span className="text-[10px] sm:text-xs">이익잉여금 (누적)</span><span className="font-mono text-xs sm:text-base">${retainedEarningsBalance.toLocaleString()}원</span></div>
-                    <div className="flex justify-between items-center border-t border-slate-50 pt-3"><span className="text-slate-400 text-[10px] sm:text-xs italic">당기순손익 (미결산)</span><span className=${`font-mono text-xs sm:text-base font-bold ${unsettledNetIncome >= 0 ? 'text-emerald-600' : 'text-red-500'}`}>${unsettledNetIncome.toLocaleString()}원</span></div>
-                  </div>
-                </div>
-                <div className="mt-6 sm:mt-8 pt-4 border-t-2 border-slate-50 flex justify-between items-center font-black"><span className="text-xs sm:text-lg uppercase">Total L+E</span><span className="font-mono text-lg sm:text-2xl text-indigo-600">${(totalLiabilitiesOnly + currentEquity).toLocaleString()}원</span></div>
+
+          ${toastData && html`
+            <div className="fixed bottom-10 left-1/2 -translate-x-1/2 z-[300] toast-up">
+              <div className=${`px-8 py-4 rounded-2xl font-bold shadow-2xl flex items-center gap-3 border ${toastData.isError ? 'bg-red-600 text-white border-red-500' : 'bg-slate-900 text-white border-white/10'}`}>
+                <i className=${`fas ${toastData.isError ? 'fa-exclamation-circle' : 'fa-check-circle'} ${toastData.isError ? 'text-white' : 'text-green-400'}`}></i>
+                ${toastData.msg}
               </div>
             </div>
           `}
 
-          ${currentView === 'IS' && html`
-            <div className="max-w-4xl mx-auto bg-white rounded-3xl border shadow-md p-5 sm:p-8 space-y-8 sm:space-y-12 text-slate-800">
-              <section>
-                <div className="flex justify-between items-end border-b-4 border-emerald-500 pb-2 mb-4 sm:mb-6 font-black"><h3 className="text-base sm:text-2xl text-emerald-600 uppercase">I. Revenue</h3><span className="font-mono text-lg sm:text-2xl font-black text-emerald-600">${revenueHierarchy.total.toLocaleString()}원</span></div>
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 sm:gap-4">
-                  ${revenueHierarchy.groups.filter(g => g.subtotal !== 0).map(group => html`
-                    <div key=${group.label} className="bg-slate-50 rounded-2xl p-4 border text-slate-800 font-bold">
-                      <div className="flex justify-between text-[10px] sm:text-xs font-black text-slate-400 uppercase mb-3 border-b pb-1"><span>${group.label}</span><span>${group.subtotal.toLocaleString()}원</span></div>
-                      <div className="space-y-1">
-                        ${group.accounts.map(a => html`
-                          <div key=${a.name} className="flex justify-between text-[11px] sm:text-sm py-0.5 italic"><span>${a.name}</span><span className="font-mono">${a.amount.toLocaleString()}원</span></div>
-                        `)}
-                      </div>
-                    </div>
-                  `)}
-                </div>
-              </section>
-              <section>
-                <div className="flex justify-between items-end border-b-4 border-orange-500 pb-2 mb-4 sm:mb-6 font-black"><h3 className="text-base sm:text-2xl text-orange-600 uppercase">II. Expenses</h3><span className="font-mono text-lg sm:text-2xl font-black text-orange-600">${expensesHierarchy.total.toLocaleString()}원</span></div>
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 sm:gap-4">
-                  ${expensesHierarchy.groups.filter(g => g.subtotal !== 0).map(group => html`
-                    <div key=${group.label} className="bg-slate-50 rounded-2xl p-4 border text-slate-800 font-bold">
-                      <div className="flex justify-between text-[10px] sm:text-xs font-black text-slate-400 uppercase mb-3 border-b pb-1"><span>${group.label}</span><span>${group.subtotal.toLocaleString()}원</span></div>
-                      <div className="space-y-1">
-                        ${group.accounts.map(a => html`
-                          <div key=${a.name} className="flex justify-between text-[11px] sm:text-sm py-0.5 italic"><span>${a.name}</span><span className="font-mono">${a.amount.toLocaleString()}원</span></div>
-                        `)}
-                      </div>
-                    </div>
-                  `)}
-                </div>
-              </section>
-              <div className=${`p-5 sm:p-8 rounded-2xl sm:rounded-3xl flex justify-between items-center shadow-inner border-2 sm:border-4 ${reportNetIncome >= 0 ? 'bg-emerald-50 border-emerald-100' : 'bg-red-50 border-red-100'}`}><div className="shrink-0 font-black"><h4 className="font-black text-sm sm:text-xl uppercase tracking-tighter text-slate-700">Net Income</h4></div><span className=${`font-mono text-xl sm:text-5xl font-black ${reportNetIncome >= 0 ? 'text-emerald-600' : 'text-red-500'}`}>${reportNetIncome.toLocaleString()}원</span></div>
+          <div className=${`fixed md:static inset-0 z-50 transition-all duration-300 ease-in-out overflow-hidden ${isSidebarOpen ? 'translate-x-0 w-[80%] md:w-64' : '-translate-x-full md:translate-x-0 md:w-20'} bg-slate-900 text-white flex flex-col shrink-0`}>
+            <div className="p-6 flex items-center justify-between border-b border-slate-800 h-20 shrink-0">
+              <div className="flex items-center gap-4">
+                <button onClick=${() => setIsSidebarOpen(!isSidebarOpen)} className="text-white hover:text-blue-400 transition-colors">
+                  <i className=${`fas ${isSidebarOpen ? 'fa-times' : 'fa-bars'} text-xl`}></i>
+                </button>
+                ${isSidebarOpen && html`<span className="font-black tracking-tighter text-2xl bg-gradient-to-r from-blue-400 to-emerald-400 bg-clip-text text-transparent">PLANNER</span>`}
+              </div>
             </div>
-          `}
-
-          ${currentView === 'GL' && html`
-            <div className="max-w-6xl mx-auto space-y-6 pb-10">
-              <${Card} className="flex flex-col sm:flex-row items-center gap-3 !p-4">
-                <div className="flex items-center gap-2 bg-slate-50 p-2 rounded-xl border border-slate-100 w-full sm:w-auto">
-                  <i data-lucide="calendar" className="text-slate-400 w-4 h-4 shrink-0"></i>
-                  <input type="date" className="bg-transparent outline-none font-bold text-slate-600 text-[11px] sm:text-sm cursor-pointer" value=${searchDateRange.start} onChange=${e => setSearchDateRange({...searchDateRange, start: e.target.value})} />
-                  <span className="text-slate-300">~</span>
-                  <input type="date" className="bg-transparent outline-none font-bold text-slate-600 text-[11px] sm:text-sm cursor-pointer" value=${searchDateRange.end} onChange=${e => setSearchDateRange({...searchDateRange, end: e.target.value})} />
-                  ${(searchDateRange.start || searchDateRange.end) && html`<button onClick=${() => setSearchDateRange({start: '', end: ''})} className="ml-1 text-slate-400 hover:text-red-500"><i data-lucide="x-circle" className="w-4 h-4"></i></button>`}
+            <nav className="flex-1 px-4 py-8 space-y-3">
+              <button onClick=${() => changeView('monthly')} className=${`w-full flex items-center gap-4 p-4 rounded-xl transition-all ${view === 'monthly' ? 'bg-blue-600 shadow-lg' : 'text-slate-400 hover:bg-slate-800'}`}>
+                <i className="fas fa-calendar-alt w-6 text-center text-lg"></i>
+                ${isSidebarOpen && html`<span className="font-bold whitespace-nowrap">Monthly</span>`}
+              </button>
+              <button onClick=${() => changeView('weekly')} className=${`w-full flex items-center gap-4 p-4 rounded-xl transition-all ${view === 'weekly' ? 'bg-blue-600 shadow-lg' : 'text-slate-400 hover:bg-slate-800'}`}>
+                <i className="fas fa-calendar-week w-6 text-center text-lg"></i>
+                ${isSidebarOpen && html`<span className="font-bold whitespace-nowrap">Weekly</span>`}
+              </button>
+              <button onClick=${() => changeView('achievement')} className=${`w-full flex items-center gap-4 p-4 rounded-xl transition-all ${view === 'achievement' ? 'bg-blue-600 shadow-lg' : 'text-slate-400 hover:bg-slate-800'}`}>
+                <i className="fas fa-chart-pie w-6 text-center text-lg"></i>
+                ${isSidebarOpen && html`<span className="font-bold whitespace-nowrap">Achievement</span>`}
+              </button>
+            </nav>
+            <div className="p-4 border-t border-slate-800">
+              ${connectionStatus === 'CONNECTED' && html`
+                <div className="w-full flex items-center justify-center gap-3 p-4 rounded-xl text-sm font-black transition-all bg-slate-800 text-slate-500">
+                  <i className=${`fas ${isSyncing ? 'fa-spinner fa-spin text-blue-400' : 'fa-cloud text-green-400'} text-lg`}></i>
+                  ${isSidebarOpen && html`<span className="whitespace-nowrap">${isSyncing ? 'Syncing...' : 'Live Sync On'}</span>`}
                 </div>
-                <div className="flex-1 flex items-center gap-2 w-full">
-                  <i data-lucide="search" className="text-slate-400 shrink-0"></i>
-                  <input className="flex-1 bg-transparent outline-none font-bold text-slate-700 text-sm sm:text-base" placeholder="메모, 날짜, 계정과목명으로 실시간 검색..." value=${searchTerm} onChange=${e => setSearchTerm(e.target.value)} />
+              `}
+              ${connectionStatus === 'RECONNECTING' && html`
+                <div className="w-full flex items-center justify-center gap-3 p-4 rounded-xl text-sm font-black transition-all bg-slate-800 text-yellow-500">
+                  <i className="fas fa-spinner fa-spin text-lg"></i>
+                  ${isSidebarOpen && html`<span className="whitespace-nowrap">Connecting...</span>`}
                 </div>
-              <//>
+              `}
+              ${connectionStatus === 'DISCONNECTED' && html`
+                <button 
+                  onClick=${() => checkConnection(false)}
+                  title="서버와 연결이 끊어졌습니다. 클릭하여 재연결을 시도합니다."
+                  className="w-full flex items-center justify-center gap-3 p-4 rounded-xl text-sm font-black transition-all bg-red-950/40 border border-red-900/50 text-red-500 cursor-pointer hover:bg-red-900/30 active:scale-[0.98]"
+                >
+                  <i className="fas fa-exclamation-triangle text-lg animate-pulse"></i>
+                  ${isSidebarOpen && html`<span className="whitespace-nowrap">Disconnected</span>`}
+                </button>
+              `}
+            </div>
+          </div>
+          
+          ${isSidebarOpen && window.innerWidth < 768 && html`<div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-40" onClick=${() => setIsSidebarOpen(false)}></div>`}
 
-              ${(searchTerm || searchDateRange.start || searchDateRange.end) ? html`
-                <${Card}>
-                  <div className="border-b px-5 py-4 bg-slate-50"><h3 className="font-black uppercase tracking-widest text-sm text-slate-800">검색 결과 (${filteredTxs.length}건)</h3></div>
-                  <div className="p-5 space-y-3">
-                    ${filteredTxs.length === 0 && html`<p className="text-center text-slate-400 py-8 text-sm">검색 결과가 없습니다.</p>`}
-                    ${filteredTxs.map(t => html`
-                      <div key=${t.id} onClick=${()=>{setEditingTransaction(t); setEntryRows({date:t.date, debits:t.debits, credits:t.credits, memo:t.memo}); setIsEntryModalOpen(true);}} className="p-4 border border-slate-100 bg-slate-50 rounded-xl hover:shadow-md transition-shadow cursor-pointer">
-                        <div className="text-xs text-slate-400 font-black mb-1">${t.date}</div>
-                        <div className="font-bold text-slate-700 mb-3">${t.memo || '내역 없음'}</div>
-                        <div className="grid grid-cols-2 gap-4 text-sm bg-white p-3 rounded-lg border border-slate-100">
-                          <div>
-                            <div className="text-[10px] text-slate-400 uppercase font-black mb-1 border-b pb-1">차변 (Debit)</div>
-                            ${t.debits.map((d, i) => html`<div key=${i} className="flex justify-between items-center py-0.5"><span className="text-indigo-600 font-medium text-xs">${getAccountById(d.accountId).name}</span><${MoneyText} amount=${d.amount} className="text-xs" /></div>`)}
+          <div className="flex-1 flex flex-col relative overflow-hidden bg-slate-50">
+            <header className="h-20 bg-white border-b px-4 md:px-8 flex items-center justify-between shrink-0 shadow-sm z-10">
+              <div className="flex items-center gap-4">
+                ${(!isSidebarOpen || window.innerWidth < 768) && html`
+                  <button onClick=${() => setIsSidebarOpen(true)} className="w-10 h-10 bg-slate-900 text-white rounded-xl flex items-center justify-center shadow-lg transition-all active:scale-95">
+                    <i className="fas fa-bars"></i>
+                  </button>
+                `}
+                <h1 className="font-black text-xl uppercase text-slate-800 tracking-tight">${view} overview</h1>
+              </div>
+              <div className="flex items-center gap-3">
+                <button onClick=${() => setIsSettingsOpen(true)} className="w-10 h-10 flex items-center justify-center rounded-xl bg-slate-100 text-slate-500 hover:bg-slate-200 transition-colors shadow-sm">
+                  <i className="fas fa-cog text-xl"></i>
+                </button>
+                <button onClick=${() => openEditor()} className="bg-blue-600 text-white px-5 py-2.5 rounded-xl text-sm font-black shadow-lg shadow-blue-200 transition-transform active:scale-95">
+                  <i className="fas fa-plus mr-2"></i> NEW
+                </button>
+              </div>
+            </header>
+
+            <main className="flex-1 flex flex-col overflow-hidden">
+              ${view === 'monthly' && html`<${MonthlyView} items=${visibleDisplayItems} currentDate=${currentDate} setCurrentDate=${setCurrentDate} setView=${setView} openEditor=${openEditor} todayStr=${todayStr} setViewingDate=${setViewingDate} />`}
+              ${view === 'weekly' && html`<${WeeklyView} items=${visibleDisplayItems} currentDate=${currentDate} setCurrentDate=${setCurrentDate} toggleHabitStatus=${toggleHabitStatus} openEditor=${openEditor} todayStr=${todayStr} />`}
+              ${view === 'achievement' && html`<${AchievementView} items=${visibleDisplayItems} currentDate=${currentDate} />`}
+            </main>
+
+            ${isSettingsOpen && html`
+              <div className="fixed inset-0 bg-slate-900/60 flex items-center justify-center z-[150] p-4 backdrop-blur-md">
+                <div className="bg-white w-full max-w-md rounded-3xl shadow-2xl overflow-hidden flex flex-col border border-white/20">
+                  <div className="p-8 border-b flex justify-between items-center bg-slate-50/50">
+                    <h3 className="text-2xl font-black text-slate-800 tracking-tight flex items-center gap-2">
+                      <i className="fab fa-telegram text-blue-500"></i> Telegram 알림 설정
+                    </h3>
+                    <button onClick=${() => setIsSettingsOpen(false)} className="w-10 h-10 flex items-center justify-center rounded-full bg-slate-100 text-slate-400 hover:text-red-500 transition-all"><i className="fas fa-times"></i></button>
+                  </div>
+                  <div className="p-8 space-y-6 max-h-[60vh] overflow-y-auto no-scrollbar">
+                    <div>
+                      <label className="text-[10px] font-black text-slate-400 uppercase block mb-2 px-1">Telegram Bot Token</label>
+                      <input type="text" className="w-full p-4 bg-slate-100 border-2 border-transparent rounded-2xl focus:bg-white focus:border-blue-500 outline-none font-bold text-slate-700 shadow-inner" placeholder="0000000000:AAxxx..." value=${settings.botToken || ''} onChange=${e => setSettings({...settings, botToken: e.target.value})} />
+                      <p className="mt-1.5 text-[9px] text-slate-400 px-1 font-medium leading-relaxed">
+                        * Telegram에서 <b>@BotFather</b>에게 <code>/newbot</code> 명령어로 봇을 생성하고 발급받은 HTTP API 토큰을 입력하세요.
+                      </p>
+                    </div>
+                    <div>
+                      <label className="text-[10px] font-black text-slate-400 uppercase block mb-2 px-1">Telegram Chat ID</label>
+                      <input type="text" className="w-full p-4 bg-slate-100 border-2 border-transparent rounded-2xl focus:bg-white focus:border-blue-500 outline-none font-bold text-slate-700 shadow-inner" placeholder="123456789" value=${settings.chatId || ''} onChange=${e => setSettings({...settings, chatId: e.target.value})} />
+                      <p className="mt-1.5 text-[9px] text-slate-400 px-1 font-medium leading-relaxed">
+                        * <b>@userinfobot</b> 혹은 <b>@GetChatID_Bot</b>을 통해 나의 고유 숫자 ID를 확인해 입력하세요. <i>(주의: 생성한 봇에 먼저 대화 시작(Start)을 눌러야 알림을 받을 수 있습니다.)</i>
+                      </p>
+                    </div>
+                    <div>
+                      <label className="text-[10px] font-black text-slate-400 uppercase block mb-2 px-1">Notification Time (Daily)</label>
+                      <select className="w-full p-4 bg-slate-100 border-2 border-transparent rounded-2xl focus:bg-white focus:border-blue-500 outline-none font-bold text-slate-700 appearance-none shadow-inner" value=${settings.notificationHour} onChange=${e => setSettings({...settings, notificationHour: e.target.value})}>
+                        ${Array.from({length: 24}).map((_, i) => html`
+                          <option key=${i} value=${String(i).padStart(2, '0')}>${String(i).padStart(2, '0')}:00</option>
+                        `)}
+                      </select>
+                      <p className="mt-1.5 text-[10px] text-slate-400 px-1 font-medium">* 매일 지정된 시간에 오늘 일정을 텔레그램으로 전송합니다.</p>
+                    </div>
+                  </div>
+                  <div className="p-8 border-t bg-slate-50/50 space-y-3 shrink-0">
+                    <button onClick=${handleTestTelegram} disabled=${isTestingTelegram || isSyncing} className="w-full bg-slate-800 text-white p-4 rounded-2xl font-black text-xs transition-all active:scale-95 uppercase tracking-wider flex items-center justify-center gap-2 shadow-md hover:bg-slate-700">
+                      ${isTestingTelegram ? html`<i className="fas fa-spinner fa-spin"></i>` : html`<i className="fab fa-telegram-plane"></i>`}
+                      테스트 메시지 전송
+                    </button>
+                    <button onClick=${handleSaveSettings} disabled=${isSyncing} className="w-full bg-blue-600 text-white p-4 rounded-2xl font-black text-sm shadow-xl shadow-blue-200 transition-all active:scale-95 uppercase tracking-widest">
+                      ${isSyncing ? html`<i className="fas fa-spinner fa-spin mr-2"></i>` : 'Apply Settings'}
+                    </button>
+                  </div>
+                </div>
+              </div>
+            `}
+
+            ${isEditorOpen && html`
+              <div className="fixed inset-0 bg-slate-900/60 flex items-center justify-center z-[100] p-2 md:p-4 backdrop-blur-md">
+                <div className="bg-white w-full max-w-lg rounded-3xl shadow-2xl overflow-hidden flex flex-col border border-white/20 relative">
+                  ${isDeleteConfirmOpen && html`
+                    <div className="absolute inset-0 bg-white/95 z-[120] flex flex-col items-center justify-center p-8 text-center animate-in fade-in zoom-in duration-200">
+                      <div className="w-16 h-16 bg-red-100 text-red-500 rounded-full flex items-center justify-center text-2xl mb-4"><i className="fas fa-trash-alt"></i></div>
+                      <h4 className="text-xl font-black text-slate-800 mb-2">${editingItem?.isVirtual ? '이 일정을 지우시겠습니까?' : '시리즈 전체를 삭제하시겠습니까?'}</h4>
+                      <p className="text-slate-400 text-sm mb-8 leading-relaxed text-center px-4">이 작업은 되돌릴 수 없으며<br/>선택한 일정이 삭제됩니다.</p>
+                      <div className="flex gap-3 w-full mt-4">
+                        <button onClick=${confirmDelete} className="flex-1 bg-red-500 text-white py-4 rounded-2xl font-black text-sm shadow-lg shadow-red-100 hover:bg-red-600 transition-colors">네, 삭제합니다</button>
+                        <button onClick=${() => setIsDeleteConfirmOpen(false)} className="flex-1 bg-slate-100 text-slate-600 py-4 rounded-2xl font-black text-sm hover:bg-slate-200 transition-colors">취소</button>
+                      </div>
+                    </div>
+                  `}
+
+                  <div className="p-6 md:p-8 border-b flex justify-between items-center bg-slate-50/50">
+                    <div>
+                      <h3 className="text-xl md:text-2xl font-black text-slate-800 tracking-tight">${editingItem ? 'Update Item' : 'Create Item'}</h3>
+                      <p className="text-[10px] text-slate-400 font-bold uppercase tracking-widest mt-1 italic">Planning Mode</p>
+                    </div>
+                    <button onClick=${() => setIsEditorOpen(false)} className="w-10 h-10 flex items-center justify-center rounded-full bg-slate-100 text-slate-400 hover:bg-red-50 hover:text-red-500 transition-all"><i className="fas fa-times"></i></button>
+                  </div>
+                  
+                  <div className="p-6 md:p-8 space-y-4 md:space-y-6 overflow-y-auto max-h-[65vh] no-scrollbar">
+                    ${errorMsg && html`<div className="p-4 bg-red-500 text-white rounded-2xl text-xs font-bold shake shadow-md flex items-center gap-2"><i className="fas fa-exclamation-circle"></i>${errorMsg}</div>`}
+                    <div>
+                      <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest block mb-2 px-1">Title *</label>
+                      <input className="w-full p-3 md:p-4 bg-slate-100 border-2 border-transparent rounded-xl md:rounded-2xl focus:bg-white focus:border-blue-500 outline-none font-bold text-slate-700 text-sm md:text-base transition-all shadow-inner" placeholder="What's the plan?" value=${formData.title} onChange=${e => { setErrorMsg(""); setFormData({...formData, title: e.target.value}); }} />
+                    </div>
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-4 md:gap-6">
+                      <div>
+                        <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest block mb-2 px-1">시작일 *</label>
+                        <input type="date" className="w-full p-3 md:p-4 bg-slate-100 border-2 border-transparent rounded-xl md:rounded-2xl outline-none font-bold text-slate-700 text-xs md:text-sm shadow-inner" value=${formData.date} onChange=${e => setFormData({...formData, date: e.target.value, endDate: formData.endDate && formData.endDate >= e.target.value ? formData.endDate : e.target.value})} disabled=${editingItem && editingItem.isVirtual} />
+                      </div>
+                      <div>
+                        <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest block mb-2 px-1">종료일</label>
+                        <input type="date" className="w-full p-3 md:p-4 bg-slate-100 border-2 border-transparent rounded-xl md:rounded-2xl outline-none font-bold text-slate-700 text-xs md:text-sm shadow-inner" value=${formData.endDate || ""} onChange=${e => setFormData({...formData, endDate: e.target.value})} disabled=${editingItem && editingItem.isVirtual} />
+                      </div>
+                      <div>
+                        <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest block mb-2 px-1">Time (HH:mm)</label>
+                        <input type="text" className="w-full p-3 md:p-4 bg-slate-100 border-2 border-transparent rounded-xl md:rounded-2xl outline-none font-bold text-slate-700 text-xs md:text-sm shadow-inner" placeholder="HH:mm" value=${formData.time} onChange=${e => setFormData({...formData, time: e.target.value})} />
+                      </div>
+                    </div>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4 md:gap-6">
+                      <div>
+                        <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest block mb-2 px-1">Category</label>
+                        <select className="w-full p-3 md:p-4 bg-slate-100 border-2 border-transparent rounded-xl md:rounded-2xl outline-none font-bold text-slate-700 text-sm shadow-inner" value=${formData.category} onChange=${(e) => setFormData({...formData, category: e.target.value})}>
+                          <option value="None">None</option>
+                          <option value="Work">Work</option>
+                          <option value="Personal">Personal</option>
+                          <option value="Exercise">Exercise</option>
+                        </select>
+                      </div>
+                      <div>
+                        <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest block mb-2 px-1">Recurrence</label>
+                        <select className="w-full p-3 md:p-4 bg-slate-100 border-2 border-transparent rounded-xl md:rounded-2xl outline-none font-bold text-slate-700 text-sm shadow-inner" value=${formData.recurrence} onChange=${(e) => setFormData({...formData, recurrence: e.target.value})} disabled=${editingItem && editingItem.isVirtual}>
+                          <option value="none">None</option>
+                          <option value="daily">Daily</option>
+                          <option value="weekly">Weekly</option>
+                          <option value="monthly">Monthly</option>
+                        </select>
+                      </div>
+                    </div>
+                    <div className="grid grid-cols-2 gap-4 md:gap-6">
+                      <div>
+                        <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest block mb-2 px-1">Type *</label>
+                        <select className="w-full p-3 md:p-4 bg-slate-100 border-2 border-transparent rounded-xl md:rounded-2xl outline-none font-bold text-slate-700 text-sm shadow-inner" value=${formData.type} onChange=${(e) => setFormData({...formData, type: e.target.value})}>
+                          <option value="Schedule">Schedule</option>
+                          <option value="Habit">Habit</option>
+                        </select>
+                      </div>
+                      <div>
+                        <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest block mb-2 px-1">Importance *</label>
+                        <select className="w-full p-3 md:p-4 bg-slate-100 border-2 border-transparent rounded-xl md:rounded-2xl outline-none font-bold text-slate-700 text-sm shadow-inner" value=${formData.importance} onChange=${(e) => setFormData({...formData, importance: e.target.value})}>
+                          <option value="None">None</option>
+                          <option value="!">!</option>
+                          <option value="!!">!!</option>
+                          <option value="!!!">!!!</option>
+                        </select>
+                      </div>
+                    </div>
+                    <div>
+                      <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest block mb-2 px-1">Location</label>
+                      <input className="w-full p-3 md:p-4 bg-slate-100 border-2 border-transparent rounded-xl md:rounded-2xl focus:bg-white focus:border-blue-500 outline-none font-bold text-slate-700 text-sm shadow-inner" placeholder="Where?" value=${formData.location} onChange=${(e) => setFormData({...formData, location: e.target.value})} />
+                    </div>
+                    <div>
+                      <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest block mb-2 px-1">Description</label>
+                      <textarea className="w-full p-3 md:p-4 bg-slate-100 border-2 border-transparent rounded-xl md:rounded-2xl h-24 md:h-28 resize-none focus:bg-white focus:border-blue-500 outline-none font-medium text-slate-600 text-sm shadow-inner" placeholder="Details..." value=${formData.description} onChange=${(e) => setFormData({...formData, description: e.target.value})}></textarea>
+                    </div>
+                  </div>
+                  <div className="p-6 md:p-8 border-t bg-slate-50/50 flex gap-4 shrink-0">
+                    <button onClick=${saveItem} className="flex-1 bg-blue-600 text-white p-4 md:p-5 rounded-2xl font-black text-sm shadow-xl shadow-blue-100 hover:bg-blue-700 transition-all active:scale-95">SAVE CHANGES</button>
+                    ${editingItem && html`
+                      <button onClick=${() => setIsDeleteConfirmOpen(true)} className="px-6 md:px-8 bg-white text-red-500 border-2 border-red-50 rounded-2xl font-black text-sm hover:bg-red-50 transition-colors">DELETE</button>
+                    `}
+                  </div>
+                </div>
+              </div>
+            `}
+
+            ${viewingDate && html`
+              <div className="fixed inset-0 bg-slate-900/60 flex items-center justify-center z-[140] p-4 backdrop-blur-md animate-in fade-in duration-200">
+                <div className="bg-white w-full max-w-md rounded-3xl shadow-2xl overflow-hidden flex flex-col border border-white/20">
+                  <div className="p-6 md:p-8 border-b flex justify-between items-center bg-slate-50/50">
+                    <div>
+                      <h3 className="text-xl md:text-2xl font-black text-slate-800 tracking-tight">${viewingDate} 일정</h3>
+                      <p className="text-[10px] text-slate-400 font-bold uppercase tracking-widest mt-1">Schedules List</p>
+                    </div>
+                    <button onClick=${() => setViewingDate(null)} className="w-10 h-10 flex items-center justify-center rounded-full bg-slate-100 text-slate-400 hover:text-red-500 transition-all"><i className="fas fa-times"></i></button>
+                  </div>
+                  <div className="p-6 md:p-8 space-y-4 max-h-[50vh] overflow-y-auto no-scrollbar">
+                    ${items.filter(it => {
+                      if (it.type !== 'Schedule' || it.status === 'DELETED') return false;
+                      const isMulti = it.endDate && it.endDate !== "" && it.endDate !== it.date && it.endDate > it.date;
+                      if (!isMulti) {
+                        return it.date === viewingDate;
+                      }
+                      return viewingDate >= it.date && viewingDate <= it.endDate;
+                    }).sort((a, b) => getImpScore(b.importance) - getImpScore(a.importance)).map(s => html`
+                      <div 
+                        key=${s.id} 
+                        onClick=${() => {
+                          setViewingDate(null);
+                          openEditor(s);
+                        }}
+                        className="flex items-center gap-3 p-3.5 rounded-2xl hover:bg-slate-50 cursor-pointer shadow-sm border border-slate-100 transition-all hover:scale-[1.01]"
+                      >
+                        <div className=${`w-1.5 h-10 rounded-full ${getCategoryBadge(s.category)} shrink-0`}></div>
+                        <div className="flex flex-col flex-1 min-w-0">
+                          <span className="font-bold text-slate-800 text-sm md:text-base truncate">
+                            ${s.recurrence && s.recurrence !== 'none' && html`<i className="fas fa-redo text-[10px] text-slate-400 mr-2"></i>`}
+                            ${s.title}
+                          </span>
+                          <div className="flex flex-wrap gap-2 items-center mt-1">
+                            ${s.time && html`<span className="text-[10px] text-slate-400 font-medium"><i className="far fa-clock mr-1"></i>${formatTimeOnly(s.time)}</span>`}
+                            ${s.location && html`<span className="text-[10px] text-blue-400 font-bold truncate max-w-[120px]"><i className="fas fa-map-marker-alt mr-1"></i>${s.location}</span>`}
+                            ${s.category && s.category !== 'None' && html`<span className=${`text-[8px] px-1.5 py-0.5 rounded font-bold uppercase ${getCategoryColor(s.category)}`}>${s.category}</span>`}
+                            ${s.importance !== 'None' && html`<span className="text-[10px] text-red-500 font-bold">${s.importance}</span>`}
                           </div>
-                          <div>
-                            <div className="text-[10px] text-slate-400 uppercase font-black mb-1 border-b pb-1">대변 (Credit)</div>
-                            ${t.credits.map((c, i) => html`<div key=${i} className="flex justify-between items-center py-0.5"><span className="text-red-500 font-medium text-xs">${getAccountById(c.accountId).name}</span><${MoneyText} amount=${c.amount} className="text-xs" /></div>`)}
-                          </div>
+                          ${s.description && html`
+                            <p className="text-[11px] text-slate-400 mt-1 truncate">${s.description}</p>
+                          `}
                         </div>
+                        <i className="fas fa-chevron-right text-slate-300 text-xs"></i>
                       </div>
                     `)}
                   </div>
-                <//>
-              ` : html`
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 sm:gap-6 text-slate-800">
-                  ${['assets', 'liabilities', 'revenue', 'expenses'].map(cat => html`
-                    <div key=${cat} className="bg-white p-4 sm:p-6 rounded-2xl border shadow-sm h-fit"><h3 className="text-[10px] sm:text-xs font-black uppercase text-slate-400 mb-3 text-center tracking-widest">${cat.toUpperCase()} Accounts</h3><div className="space-y-1.5">${(cat === 'liabilities' ? [...(accounts[cat] || []), {id: 'closing_temp', name: '결산(임시)'}] : [...(accounts[cat] || [])]).sort((a,b) => a.name.localeCompare(b.name, 'ko-KR')).map(a => html`<div key=${a.id} className="flex justify-between p-3 bg-slate-50 rounded-xl border border-transparent font-bold"><span className="text-xs sm:text-base">${a.name}</span><span className="font-mono text-sm sm:text-base">${(cat==='liabilities'||cat==='revenue' ? Math.abs(accountBalances[a.id] || 0) : accountBalances[a.id] || 0).toLocaleString()}원</span></div>`)}</div></div>
-                  `)}
-                </div>
-              `}
-            </div>
-          `}
-
-          ${currentView === 'EXPENSE_REPORT' && html`
-            <${MonthlyIncomeExpenseReport} accounts=${accounts} transactions=${transactions} getAccountById=${getAccountById} onEditTransaction=${(txId) => {
-              const tx = transactions.find(t => t.id === txId);
-              if(tx) { setEditingTransaction(tx); setEntryRows({ date: tx.date, debits: tx.debits, credits: tx.credits, memo: tx.memo }); setIsEntryModalOpen(true); }
-            }} />
-          `}
-
-          ${currentView === 'BUDGET' && html`
-            <${MonthlyBudgetReport} accounts=${accounts} transactions=${transactions} budgets=${data.budgets} saveBudget=${saveBudget} />
-          `}
-
-        </div>
-      </main>
-
-      <${Modal} isOpen=${isSettingsModalOpen} onClose=${() => setIsSettingsModalOpen(false)} title="더블북 환경 설정" maxWidth="max-w-5xl" zIndex="z-[100]">
-        <div className="flex flex-col md:flex-row gap-4 h-[78vh] md:h-[650px] overflow-hidden text-slate-800">
-          <div className="flex md:flex-col overflow-x-auto pb-1 md:pb-0 gap-1.5 w-full md:w-48 shrink-0">
-            ${[{ id: 'equity', label: '자본금', icon: 'coins' }, { id: 'accounts', label: '계정과목', icon: 'settings' }, { id: 'editTransactions', label: '거래 관리', icon: 'edit-3' }].map(tab => html`
-              <button key=${tab.id} onClick=${() => setSettingsTab(tab.id)} className=${`flex items-center justify-center md:justify-start gap-2 p-3 sm:p-4 rounded-xl font-bold transition-all flex-1 md:flex-none text-xs sm:text-sm whitespace-nowrap ${settingsTab === tab.id ? 'bg-indigo-600 text-white shadow-md' : 'bg-slate-50 text-slate-400 hover:bg-slate-100'}`}><i data-lucide=${tab.icon} className="w-4 h-4"></i>${tab.label}</button>
-            `)}
-            ${isDirty && html`
-              <div className="mt-auto pt-4 hidden md:block">
-                <${Button} variant="primary" onClick=${handleSyncSettings} className="w-full bg-orange-500 hover:bg-orange-600 animate-pulse">설정 저장하기<//>
-              </div>
-            `}
-          </div>
-          <div className="flex-1 overflow-y-auto pr-0 md:pr-4 modal-scroll pb-10">
-            ${settingsTab === 'equity' && html`
-              <div className="space-y-6">
-                <h4 className="text-sm font-black uppercase tracking-widest text-slate-800 ml-1">자본금 및 기초 부채</h4>
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  <div className="bg-white rounded-2xl border border-slate-200 overflow-hidden flex flex-col shadow-sm">
-                    <div className="bg-indigo-600 text-white p-2 text-center text-[10px] font-black uppercase">Debit (차변 - 기초 자산)</div>
-                    <div className="p-3 space-y-2 min-h-[150px] flex-1">
-                      ${(initialSetup.debits || []).map((r, i) => html`
-                        <div key=${i} className="flex gap-2 items-center">
-                          <button onClick=${() => setActivePicker({ type: 'setupDebits', index: i })} className="flex-1 p-2.5 rounded-lg bg-slate-50 text-[11px] font-bold border border-slate-100 text-left truncate">${r.accountId ? getAccountById(r.accountId).name : '자산 선택'}</button>
-                          <input type="number" className="w-20 sm:w-28 p-2 rounded-lg bg-white text-right font-black border border-slate-200 text-indigo-600 text-xs sm:text-sm outline-none" value=${r.amount || ''} onChange=${(e) => { const val = Number(e.target.value); setData(prev => { const n = [...prev.initialSetup.debits]; n[i] = { ...n[i], amount: val }; return { ...prev, initialSetup: { ...prev.initialSetup, debits: n } }; }); setIsDirty(true); }} />
-                          <button onClick=${()=>{ setData(prev => { const n = [...prev.initialSetup.debits]; if (n.length > 1) n.splice(i, 1); return { ...prev, initialSetup: { ...prev.initialSetup, debits: n } }; }); setIsDirty(true); }} className="text-slate-300 hover:text-red-500 p-1"><${TrashIcon}/></button>
-                        </div>
-                      `)}
-                      <button onClick=${() => { setData(prev => ({ ...prev, initialSetup: { ...prev.initialSetup, debits: [...(prev.initialSetup.debits || []), { accountId: '', amount: 0 }] } })); setIsDirty(true); }} className="w-full p-2 mt-2 text-[10px] font-black text-indigo-500 border border-dashed border-indigo-200 rounded-lg hover:bg-indigo-50">+ 자산 추가</button>
-                    </div>
-                    <div className="bg-slate-50 p-3 flex justify-between font-black border-t text-xs"><span className="text-[9px] uppercase text-slate-400">Sum of Assets</span><span className="font-mono text-indigo-600 font-black">${setupTotalDebits.toLocaleString()}원</span></div>
-                  </div>
-                  <div className="bg-white rounded-2xl border border-slate-200 overflow-hidden flex flex-col h-fit shadow-sm">
-                    <div className="bg-emerald-600 text-white p-2 text-center text-[10px] font-black uppercase">Credit (대변 - 자본/부채)</div>
-                    <div className="p-3 space-y-3">
-                      <div className="p-3 bg-emerald-50 rounded-xl border border-emerald-100 flex justify-between items-center"><span className="font-bold text-emerald-800 text-[11px] sm:text-sm font-black">자본금 (자동 계산)</span><span className="font-mono font-black text-emerald-600 text-xs sm:text-lg">${calculatedInitialCapital.toLocaleString()}원</span></div>
-                      <div className="p-3 bg-emerald-50 rounded-xl border border-emerald-100 flex justify-between items-center gap-2">
-                        <span className="font-bold text-emerald-800 text-[11px] sm:text-sm font-black">이익잉여금</span>
-                        <input 
-                          type="number" 
-                          className="w-24 sm:w-32 p-2 rounded-lg bg-white text-right font-black border border-emerald-200 text-emerald-600 text-xs sm:text-sm outline-none font-mono" 
-                          value=${retainedEarningsAmount || ''} 
-                          placeholder="0" 
-                          onChange=${(e) => { 
-                            const val = Number(e.target.value); 
-                            setData(prev => { 
-                              const newCredits = [...(prev.initialSetup.credits || [])]; 
-                              const idx = newCredits.findIndex(c => String(c.accountId) === String(retainedEarningsId)); 
-                              if (idx >= 0) { 
-                                newCredits[idx] = { ...newCredits[idx], amount: val }; 
-                              } else { 
-                                newCredits.push({ accountId: retainedEarningsId, amount: val }); 
-                              } 
-                              return { ...prev, initialSetup: { ...prev.initialSetup, credits: newCredits } }; 
-                            }); 
-                            setIsDirty(true); 
-                          }} 
-                        />
-                      </div>
-                      <div className="text-[9px] font-black text-slate-300 uppercase tracking-widest pt-1 border-t mb-1">기초 부채 내역</div>
-                      ${(initialSetup.credits || []).filter(r => String(r.accountId) !== String(retainedEarningsId)).map((r, i) => {
-                        const originalIndex = initialSetup.credits.findIndex(c => c === r);
-                        return html`
-                          <div key=${originalIndex} className="flex gap-2 items-center">
-                            <button onClick=${() => setActivePicker({ type: 'setupCredits', index: originalIndex })} className="flex-1 p-2.5 rounded-lg bg-slate-50 text-[11px] font-bold border border-slate-100 text-left truncate">${r.accountId ? getAccountById(r.accountId).name : '부채 선택'}</button>
-                            <input type="number" className="w-20 sm:w-28 p-2 rounded-lg bg-white text-right font-black border border-slate-200 text-red-500 text-xs outline-none" value=${r.amount || ''} onChange=${(e) => { const val = Number(e.target.value); setData(prev => { const n = [...prev.initialSetup.credits]; n[originalIndex] = { ...n[originalIndex], amount: val }; return { ...prev, initialSetup: { ...prev.initialSetup, credits: n } }; }); setIsDirty(true); }} />
-                            <button onClick=${()=>{ setData(prev => { const n = [...prev.initialSetup.credits]; n.splice(originalIndex, 1); return { ...prev, initialSetup: { ...prev.initialSetup, credits: n } }; }); setIsDirty(true); }} className="text-slate-300 hover:text-red-500 p-1"><${TrashIcon}/></button>
-                          </div>
-                        `;
-                      })}
-                      <button onClick=${() => { setData(prev => ({ ...prev, initialSetup: { ...prev.initialSetup, credits: [...(prev.initialSetup.credits || []), { accountId: '', amount: 0 }] } })); setIsDirty(true); }} className="w-full p-2 mt-1 text-[10px] font-black text-red-400 border border-dashed border-red-100 rounded-lg hover:bg-red-50">+ 부채 추가</button>
-                    </div>
+                  <div className="p-6 md:p-8 border-t bg-slate-50/50 flex gap-4 shrink-0">
+                    <button 
+                      onClick=${() => {
+                        const defaultDate = viewingDate;
+                        setViewingDate(null);
+                        openEditor({
+                          ...defaultForm,
+                          date: defaultDate,
+                          endDate: defaultDate
+                        });
+                      }} 
+                      className="w-full bg-blue-600 text-white p-4 rounded-2xl font-black text-sm shadow-xl shadow-blue-100 hover:bg-blue-700 transition-all active:scale-95 text-center"
+                    >
+                      <i className="fas fa-plus mr-2"></i> 새 일정 추가
+                    </button>
                   </div>
                 </div>
               </div>
             `}
-            ${settingsTab === 'accounts' && html`
-              <div className="space-y-10">
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                  ${['assets', 'liabilities'].map(cat => html`
-                    <div key=${cat} className="bg-slate-50 p-4 rounded-2xl border shadow-inner h-fit text-slate-800">
-                      <div className="flex justify-between items-center mb-3 text-indigo-500 font-black text-[10px] uppercase"><span>${cat.toUpperCase()} Accounts</span><button onClick=${() => setAddingToCategory(cat)} className="p-1 hover:bg-indigo-100 rounded-full transition-colors"><i data-lucide="plus" className="w-4 h-4"></i></button></div>
-                      <div className="space-y-1.5">
-                        ${(accounts[cat] || []).filter(a => a.name !== '이익잉여금').map(a => html`
-                          <div key=${a.id} className="flex items-center gap-2 p-2 bg-white rounded-xl border group shadow-sm transition-all hover:border-indigo-200 font-bold">
-                            <input className="flex-1 bg-transparent border-none outline-none font-bold text-xs sm:text-sm text-slate-800" value=${a.name} onChange=${(e) => handleUpdateAccountName(cat, a.id, e.target.value)} />
-                            <button onClick=${() => handleDeleteAccount(cat, a.id)} className="sm:opacity-0 group-hover:opacity-100 text-red-400 p-1.5"><${TrashIcon}/></button>
-                          </div>
-                        `)}
-                        ${addingToCategory === cat && html`
-                          <div className="p-1"><input autoFocus className="w-full p-2 bg-white rounded-xl border border-indigo-200 text-xs font-bold text-indigo-600 outline-none" placeholder="항목 입력 후 Enter" onBlur=${(e) => handleAddAccount(cat, e.target.value)} onKeyDown=${(e)=>e.key==='Enter'&&e.target.blur()} /></div>
-                        `}
-                      </div>
-                    </div>
-                  `)}
-                </div>
-                <div className="space-y-6">
-                  ${['revenue', 'expenses'].map(type => html`
-                    <div key=${type} className="border-t pt-5">
-                      <div className="flex justify-between items-center mb-4"><h5 className="font-black text-indigo-600 uppercase tracking-widest text-[11px]">${type.toUpperCase()} 분류 관리</h5><button onClick=${() => setAddingToCategory(type)} className="text-[10px] bg-indigo-600 text-white px-3 py-1.5 rounded-full font-black shadow-sm">+ 추가</button></div>
-                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 sm:gap-4">
-                        ${['fixed', 'variable'].map(subtype => html`
-                          <div key=${subtype} onDragOver=${handleDragOver} onDrop=${() => handleSubtypeDrop(subtype, type)} className="bg-white border-2 border-slate-50 rounded-2xl p-4 sm:p-5 transition-all shadow-sm min-h-[120px]">
-                            <div className="flex justify-between items-center mb-3 border-b border-slate-50 pb-1.5 text-slate-400 font-black"><span className="uppercase text-[9px] tracking-widest">${subtype === 'fixed' ? '고정 (Fixed)' : '변동 (Variable)'}</span><i data-lucide=${subtype === 'fixed' ? 'lock' : 'zap'} className="w-3 h-3"></i></div>
-                            <div className="grid grid-cols-1 gap-1.5">
-                              ${accounts[type].filter(a => (a.subtype || 'fixed') === subtype).map(acc => html`
-                                <div key=${acc.id} draggable onDragStart=${() => handleAccountDragStart(acc.id)} className="bg-slate-50 border border-slate-100 px-3 py-2.5 rounded-xl text-xs font-bold flex items-center gap-3 group hover:bg-white hover:border-indigo-100 transition-all text-slate-700 w-full shadow-sm">
-                                  <i data-lucide="grip-vertical" className="text-slate-200 shrink-0 hidden sm:block"></i>
-                                  <input className="bg-transparent border-none outline-none flex-1 font-bold min-w-0" value=${acc.name} onChange=${(e) => handleUpdateAccountName(type, acc.id, e.target.value)} />
-                                  <button onClick=${() => handleDeleteAccount(type, acc.id)} className="sm:opacity-0 group-hover:opacity-100 text-red-400 p-1"><i data-lucide="x" className="w-3.5 h-3.5"></i></button>
-                                </div>
-                              `)}
-                            </div>
-                          </div>
-                        `)}
-                      </div>
-                      ${addingToCategory === type && html`<div className="mt-3 p-3 bg-indigo-50 rounded-2xl border border-indigo-100 text-center"><input autoFocus className="bg-transparent border-none outline-none font-black text-indigo-600 text-center text-xs w-full" placeholder="항목 입력 후 Enter..." onBlur=${(e) => handleAddAccount(type, e.target.value)} onKeyDown=${(e)=>e.key==='Enter'&&e.target.blur()} /></div>`}
-                    </div>
-                  `)}
-                </div>
-              </div>
-            `}
-            ${settingsTab === 'editTransactions' && html`
-              <div className="space-y-4 pb-10">
-                <div className="flex items-center gap-2 mb-4 bg-white p-3 rounded-xl border border-slate-100 text-slate-800 font-bold overflow-x-auto">
-                  <i data-lucide="search" className="text-slate-300 w-4 h-4 shrink-0"></i><input type="date" className="bg-transparent outline-none font-bold text-[11px] cursor-pointer" value=${editRange.start} onChange=${(e)=>setEditRange({...editRange, start: e.target.value})}/><span className="text-slate-300">~</span><input type="date" className="bg-transparent outline-none font-bold text-[11px] cursor-pointer" value=${editRange.end} onChange=${(e)=>setEditRange({...editRange, end: e.target.value})}/>
-                </div>
-                <div className="space-y-2">
-                  ${transactions.filter(t => t.date >= editRange.start && t.date <= editRange.end).sort((a,b) => b.date.localeCompare(a.date)).map(t => html`
-                    <div key=${t.id} onClick=${()=>{setEditingTransaction(t); setEntryRows({date:t.date, debits:t.debits, credits:t.credits, memo:t.memo}); setIsEntryModalOpen(true);}} className="p-3.5 bg-white border rounded-xl flex justify-between cursor-pointer hover:border-indigo-500 transition-all shadow-sm active:bg-indigo-50">
-                      <div><p className="text-[9px] font-black text-slate-400 uppercase">${t.date}</p><p className="font-bold text-xs text-slate-700 mt-0.5">${t.memo || '거래 내역'}</p></div>
-                      <div className="text-right flex flex-col justify-center"><div className="font-mono font-black text-slate-700 text-xs sm:text-base">${(t.debits.reduce((s,d)=>s+d.amount, 0)).toLocaleString()}원</div></div>
-                    </div>
-                  `)}
-                </div>
-              </div>
-            `}
-            ${isDirty && html`
-              <div className="mt-6 md:hidden">
-                <${Button} variant="primary" onClick=${handleSyncSettings} className="w-full bg-orange-500 hover:bg-orange-600 animate-pulse">설정 변경사항 저장하기<//>
-              </div>
-            `}
           </div>
         </div>
-      <//>
+      `;
+    };
 
-      <${Modal} isOpen=${isEntryModalOpen} onClose=${() => {setIsEntryModalOpen(false); setEditingTransaction(null);}} title=${editingTransaction?"전표 수정":"전표 입력"} maxWidth="max-w-6xl" zIndex="z-[120]">
-        <div className="flex flex-col lg:flex-row gap-4 sm:gap-6 text-slate-800">
-          <div className="w-full lg:w-48 shrink-0 bg-slate-50 p-4 rounded-2xl border h-fit shadow-inner">
-            <label className="block text-[9px] font-black text-slate-400 uppercase mb-2 text-center lg:text-left">전표 날짜</label>
-            <input type="date" className="w-full p-2.5 rounded-xl border text-xs font-bold outline-none mb-3 shadow-sm bg-white text-slate-700" value=${entryRows.date} onChange=${(e) => setEntryRows({...entryRows, date: e.target.value})} />
-            ${editingTransaction && html`<button onClick=${handleDeleteTransactionWrapper} className="w-full p-3 bg-red-50 text-red-500 rounded-xl font-bold text-[11px] hover:bg-red-500 hover:text-white transition-all shadow-sm flex items-center justify-center gap-2"><i data-lucide="trash-2" className="w-3.5 h-3.5"></i>삭제하기</button>`}
-          </div>
-          <div className="flex-1 space-y-4 pb-20 sm:pb-0">
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <div className="bg-white rounded-2xl border shadow-sm flex flex-col overflow-hidden">
-                <div className="bg-indigo-600 text-white p-2 font-black text-center text-[10px] uppercase">Debit (차변)</div>
-                <div className="p-3 space-y-2 min-h-[120px] sm:min-h-[250px] flex-1">
-                  ${entryRows.debits.map((r, i) => html`
-                    <div key=${i} className="flex gap-1.5 items-center animate-in slide-in-from-left-2">
-                      <button onClick=${() => setActivePicker({ type: 'debits', index: i })} className="flex-1 p-2.5 rounded-lg bg-slate-50 text-[11px] font-bold border border-slate-100 text-left truncate active:bg-indigo-50">${r.accountId ? getAccountById(r.accountId).name : '계정 선택'}</button>
-                      <input type="number" className="w-20 sm:w-28 p-2 rounded-lg bg-white text-right font-black border border-slate-200 text-xs outline-none" placeholder="0" value=${r.amount || ''} onChange=${(e) => handleUpdateEntryRow('debits', i, 'amount', Number(e.target.value))} />
-                      <button onClick=${()=>{const n=[...entryRows.debits]; if(n.length>1){n.splice(i,1); setEntryRows(prev => ({...prev, debits:n}));}}} className="text-slate-300 hover:text-red-500 p-1"><${TrashIcon}/></button>
-                    </div>
-                  `)}
-                  <button onClick=${() => setEntryRows(prev => ({...prev, debits: [...prev.debits, {accountId:'', amount:0}]}))} className="w-full p-2 mt-1 text-[10px] font-black text-indigo-500 border border-dashed border-indigo-200 rounded-lg hover:bg-indigo-50">+ 행 추가</button>
-                </div>
-                <div className="bg-slate-50 p-2.5 flex justify-between items-center font-black border-t text-xs sm:text-base">
-                  <span className="text-[9px] uppercase text-slate-400">Total Debit</span>
-                  ${totalCreditSum > totalDebitSum && html`
-                    <span className="text-[10px] sm:text-xs text-red-500 font-black px-2 py-0.5 rounded-md bg-red-50 border border-red-100 animate-pulse">
-                      ${(totalCreditSum - totalDebitSum).toLocaleString()}원 부족
-                    </span>
-                  `}
-                  <span className="font-mono text-indigo-600 font-black">${totalDebitSum.toLocaleString()}원</span>
-                </div>
-              </div>
-              <div className="bg-white rounded-2xl border shadow-sm flex flex-col overflow-hidden">
-                <div className="bg-red-500 text-white p-2 font-black text-center text-[10px] uppercase">Credit (대변)</div>
-                <div className="p-3 space-y-2 min-h-[120px] sm:min-h-[250px] flex-1">
-                  ${entryRows.credits.map((r, i) => html`
-                    <div key=${i} className="flex gap-1.5 items-center animate-in slide-in-from-right-2">
-                      <button onClick=${() => setActivePicker({ type: 'credits', index: i })} className="flex-1 p-2.5 rounded-lg bg-slate-50 text-[11px] font-bold border border-slate-100 text-left truncate active:bg-red-50">${r.accountId ? getAccountById(r.accountId).name : '계정 선택'}</button>
-                      <input type="number" className="w-20 sm:w-28 p-2 rounded-lg bg-white text-right font-black border border-slate-200 text-xs outline-none" placeholder="0" value=${r.amount || ''} onChange=${(e) => handleUpdateEntryRow('credits', i, 'amount', Number(e.target.value))} />
-                      <button onClick=${()=>{const n=[...entryRows.credits]; if(n.length>1){n.splice(i,1); setEntryRows(prev => ({...prev, credits:n}));}}} className="text-slate-300 hover:text-red-500 p-1"><${TrashIcon}/></button>
-                    </div>
-                  `)}
-                  <button onClick=${() => setEntryRows(prev => ({...prev, credits: [...prev.credits, {accountId:'', amount:0}]}))} className="w-full p-2 mt-1 text-[10px] font-black text-red-500 border border-dashed border-red-200 rounded-lg hover:bg-red-50">+ 행 추가</button>
-                </div>
-                <div className="bg-slate-50 p-2.5 flex justify-between items-center font-black border-t text-xs sm:text-base">
-                  <span className="text-[9px] uppercase text-slate-400">Total Credit</span>
-                  ${totalDebitSum > totalCreditSum && html`
-                    <span className="text-[10px] sm:text-xs text-red-500 font-black px-2 py-0.5 rounded-md bg-red-50 border border-red-100 animate-pulse">
-                      ${(totalDebitSum - totalCreditSum).toLocaleString()}원 부족
-                    </span>
-                  `}
-                  <span className="font-mono text-red-500 font-black">${totalCreditSum.toLocaleString()}원</span>
-                </div>
-              </div>
-            </div>
-            <div className="bg-slate-50 p-3 sm:p-4 rounded-2xl border flex flex-col gap-3 shadow-inner">
-              <input type="text" className="w-full bg-white p-2.5 rounded-xl border border-slate-200 outline-none font-bold placeholder:text-slate-300 text-slate-700 text-xs sm:text-base" placeholder="거래 메모를 입력하세요 (예: 식비 결제)" value=${entryRows.memo} onChange=${(e) => setEntryRows({...entryRows, memo: e.target.value})} />
-              <div className="flex items-center justify-between gap-4">
-                <span className=${`px-4 py-2 rounded-full text-[10px] font-black uppercase shadow-sm ${totalDebitSum === totalCreditSum && totalDebitSum > 0 ? 'bg-emerald-500 text-white' : 'bg-slate-200 text-slate-500'}`}>
-                  ${totalDebitSum === totalCreditSum && totalDebitSum > 0 
-                    ? '차대일치' 
-                    : `불일치 (${Math.abs(totalDebitSum - totalCreditSum).toLocaleString()}원 부족)`}
-                </span>
-                <button onClick=${handleSaveEntry} disabled=${isSavingEntry || totalDebitSum !== totalCreditSum || totalDebitSum === 0} className="flex-1 bg-indigo-600 hover:bg-indigo-700 disabled:bg-slate-300 text-white px-6 py-3 rounded-xl font-black shadow-lg transition-all active:scale-95 text-xs sm:text-sm whitespace-nowrap">
-                  ${isSavingEntry ? html`
-                    <span className="flex items-center justify-center gap-2">
-                      <i data-lucide="loader-2" className="w-4 h-4 animate-spin"></i> 저장 중...
-                    </span>
-                  ` : "전표 저장하기"}
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
-      <//>
-
-      <${Modal} isOpen=${activePicker !== null} onClose=${() => setActivePicker(null)} title="계정과목 선택" maxWidth="max-w-4xl" zIndex="z-[150]">
-        <${AccountGridPicker} accounts=${accounts} onPick=${handleAccountPick} />
-      <//>
-    </div>
-  `;
-};
-
-const Root = () => html`
-  <${ErrorBoundary}>
-    <${App} />
-  <//>
-`;
-
-const root = ReactDOM.createRoot(document.getElementById('root'));
-root.render(html`<${Root} />`);
-</script>
+    const root = ReactDOM.createRoot(document.getElementById('root'));
+    root.render(html`<${App} />`);
+  </script>
 </body>
 </html>
