@@ -1,204 +1,304 @@
+/**
+ * 웹 앱 진입점
+ */
 function doGet() {
-  return HtmlService.createHtmlOutputFromFile('index')
-      .setTitle('DoubleBook - GAS 통합 가계부')
-      .addMetaTag('viewport', 'width=device-width, initial-scale=1')
-      .setXFrameOptionsMode(HtmlService.XFrameOptionsMode.ALLOWALL);
+  return HtmlService.createTemplateFromFile('index')
+    .evaluate()
+    .setTitle('일정관리 프로그램')
+    .addMetaTag('viewport', 'width=device-width, initial-scale=1')
+    .setXFrameOptionsMode(HtmlService.XFrameOptionsMode.ALLOWALL);
 }
 
-function getSheet(name) {
+/**
+ * 시트 초기화 및 헤더 체크
+ */
+function getSheet() {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
-  let sheet = ss.getSheetByName(name);
+  let sheet = ss.getSheetByName('Schedules');
+  const headers = ['id', 'title', 'date', 'time', 'location', 'description', 'type', 'importance', 'status', 'updatedAt', 'endDate', 'category'];
+  
   if (!sheet) {
-    sheet = ss.insertSheet(name);
-    if (name === 'Transactions') {
-      sheet.appendRow(['id', 'date', 'debits', 'credits', 'memo']);
-    } else if (name === 'Settings') {
-      sheet.appendRow(['key', 'value']);
-    } else if (name === 'Budgets') {
-      sheet.appendRow(['month', 'data']);
-    }
+    sheet = ss.insertSheet('Schedules');
+    sheet.appendRow(headers);
+    sheet.setFrozenRows(1);
   }
   return sheet;
 }
 
-function getAllData() {
-  const settingsSheet = getSheet('Settings');
-  const transSheet = getSheet('Transactions');
+/**
+ * 환경설정 시트 가져오기 (단일 행 유지 보장)
+ */
+function getSettingsSheet() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  let sheet = ss.getSheetByName('Settings');
+  if (!sheet) {
+    sheet = ss.insertSheet('Settings');
+    sheet.appendRow(['botToken', 'chatId', 'notificationHour', 'updatedAt']);
+    sheet.setFrozenRows(1);
+  }
+  return sheet;
+}
+
+/**
+ * 설정값 불러오기 (하위 호환성 유지)
+ */
+function getSettings() {
+  try {
+    const sheet = getSettingsSheet();
+    const data = sheet.getDataRange().getValues();
+    if (data.length <= 1) {
+      return { success: true, data: { botToken: "", chatId: "", notificationHour: "08" } };
+    }
+    
+    const headers = data[0];
+    const botTokenIndex = headers.indexOf('botToken');
+    const chatIdIndex = headers.indexOf('chatId');
+    const hourIndex = headers.indexOf('notificationHour');
+    
+    let botToken = "";
+    let chatId = "";
+    let notificationHour = "08";
+    
+    if (botTokenIndex !== -1 && data.length > 1) botToken = data[1][botTokenIndex];
+    if (chatIdIndex !== -1 && data.length > 1) chatId = data[1][chatIdIndex];
+    if (hourIndex !== -1 && data.length > 1) notificationHour = data[1][hourIndex];
+    
+    return {
+      success: true,
+      data: {
+        botToken: botToken,
+        chatId: chatId,
+        notificationHour: notificationHour
+      }
+    };
+  } catch (e) {
+    console.error("getSettings error: " + e.message);
+    return { success: false, message: e.message };
+  }
+}
+
+/**
+ * 설정값 저장 (중복 저장 방지 및 트리거 재설정)
+ */
+function saveSettings(settings) {
+  try {
+    const sheet = getSettingsSheet();
+    const headers = ['botToken', 'chatId', 'notificationHour', 'updatedAt'];
+    
+    sheet.clear(); 
+    sheet.appendRow(headers);
+    sheet.appendRow([settings.botToken, settings.chatId, settings.notificationHour, new Date()]);
+    sheet.setFrozenRows(1);
+    
+    manageTriggers(parseInt(settings.notificationHour));
+    return { success: true };
+  } catch (e) {
+    console.error("saveSettings error: " + e.message);
+    return { success: false, message: e.message };
+  }
+}
+
+/**
+ * 시간 기반 트리거 관리
+ */
+function manageTriggers(hour) {
+  const triggers = ScriptApp.getProjectTriggers();
+  triggers.forEach(t => {
+    if (t.getHandlerFunction() === 'sendDailyNotification') {
+      ScriptApp.deleteTrigger(t);
+    }
+  });
   
-  const settingsRaw = settingsSheet.getDataRange().getValues();
-  const transRaw = transSheet.getDataRange().getValues();
-  
-  let initialSetup = { debits: [{ account: '현금', amount: 0 }], credits: [] };
-  let accounts = {
-    assets: [{ id: 'a1', name: '현금', subtype: 'fixed' }],
-    liabilities: [{ id: 'l1', name: '신용카드', subtype: 'variable' }, { id: 'e1', name: '이익잉여금', subtype: 'fixed' }],
-    revenue: [{ id: 'r1', name: '급여', subtype: 'fixed' }],
-    expenses: [{ id: 'x1', name: '식비', subtype: 'variable' }]
+  // 매일 지정된 시간에 실행되는 트리거 생성
+  ScriptApp.newTrigger('sendDailyNotification')
+    .timeBased()
+    .everyDays(1)
+    .atHour(hour)
+    .nearMinute(0) // 정각 근처 실행 시도
+    .create();
+}
+
+/**
+ * 텔레그램 메시지 API 전송 헬퍼
+ */
+function sendTelegramMessage(botToken, chatId, text) {
+  const url = 'https://api.telegram.org/bot' + botToken + '/sendMessage';
+  const payload = {
+    chat_id: chatId,
+    text: text,
+    parse_mode: 'HTML'
   };
+  const options = {
+    method: 'post',
+    contentType: 'application/json',
+    payload: JSON.stringify(payload),
+    muteHttpExceptions: true
+  };
+  const response = UrlFetchApp.fetch(url, options);
+  const responseData = JSON.parse(response.getContentText());
+  if (!responseData.ok) {
+    throw new Error(responseData.description || "Telegram API Error");
+  }
+  return responseData;
+}
+
+/**
+ * 텔레그램 연동 테스트 전송
+ */
+function testTelegram(botToken, chatId) {
+  try {
+    const testMessage = `🤖 <b>[PLANNER]</b> 텔레그램 알림 연동 테스트에 성공했습니다!`;
+    sendTelegramMessage(botToken, chatId, testMessage);
+    return { success: true };
+  } catch (e) {
+    console.error("testTelegram error: " + e.message);
+    return { success: false, message: e.message };
+  }
+}
+
+/**
+ * 매일 일정 텔레그램 알림 발송 로직 (Schedule과 Habit 모두 포함)
+ */
+function sendDailyNotification() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const tz = ss.getSpreadsheetTimeZone(); // 스프레드시트 시간대 사용
+  const settingsRes = getSettings();
   
-  if (settingsRaw.length > 1) {
-    settingsRaw.forEach(row => {
-      if (row[0] === 'initialSetup') initialSetup = JSON.parse(row[1]);
-      if (row[0] === 'accounts') accounts = JSON.parse(row[1]);
+  if (!settingsRes.success || !settingsRes.data) return;
+  const settings = settingsRes.data;
+  
+  if (!settings.botToken || !settings.chatId) return;
+  
+  const todayStr = Utilities.formatDate(new Date(), tz, "yyyy-MM-dd");
+  const dataRes = loadData();
+  
+  if (!dataRes.success || !dataRes.data) return;
+  const items = dataRes.data;
+  
+  // 오늘 날짜이고 Schedule 또는 Habit인 항목 필터링 (삭제되지 않은 항목만)
+  const todayItems = items.filter(it => it.date === todayStr && (it.type === 'Schedule' || it.type === 'Habit') && it.status !== 'DELETED');
+  
+  if (todayItems.length === 0) return; 
+  
+  const body = todayItems.map(s => {
+    const typeEmoji = s.type === 'Habit' ? '⏰' : '📅';
+    const timePart = s.time ? ` 🕒 <b>${s.time}</b>` : "";
+    const locPart = s.location ? ` 📍 <i>${s.location}</i>` : "";
+    const importance = s.importance && s.importance !== 'None' ? ` ⚠️ <b>${s.importance}</b>` : "";
+    return `${typeEmoji} <b>${s.title}</b>${timePart}${locPart}${importance}`;
+  }).join('\n');
+  
+  const message = `🔔 <b>오늘의 일정 알림 (${todayStr})</b>\n\n오늘 예정된 리스트입니다:\n\n${body}\n\n오늘도 좋은 하루 보내세요! 💪`;
+  
+  sendTelegramMessage(settings.botToken, settings.chatId, message);
+}
+
+/**
+ * 모든 일정 데이터 읽기
+ */
+function loadData() {
+  try {
+    const ss = SpreadsheetApp.getActiveSpreadsheet();
+    const tz = ss.getSpreadsheetTimeZone();
+    const sheet = getSheet();
+    const values = sheet.getDataRange().getValues();
+    if (values.length <= 1) return { success: true, data: [] };
+    
+    const headers = values.shift();
+    const data = values.map(row => {
+      let obj = {};
+      headers.forEach((header, i) => {
+        let val = row[i];
+        
+        // 날짜 객체 처리 부분: time 헤더일 경우 시간만 추출하도록 개선
+        if (val instanceof Date) {
+          if (header === 'date' || header === 'endDate') {
+            val = Utilities.formatDate(val, tz, "yyyy-MM-dd");
+          } else if (header === 'time') {
+            val = Utilities.formatDate(val, tz, "HH:mm");
+          } else {
+            val = Utilities.formatDate(val, tz, "yyyy-MM-dd HH:mm:ss");
+          }
+        }
+        
+        if (header === 'id') val = val.toString();
+        
+        // 문자열로 들어온 시간값에 1899년도 찌꺼기가 남아있을 경우 정제
+        if (header === 'time' && typeof val === 'string' && val.includes('1899')) {
+           const match = val.match(/(\d{2}:\d{2})/);
+           if (match) val = match[0];
+        }
+
+        obj[header] = val || "";
+      });
+      return obj;
     });
+    return { success: true, data: data };
+  } catch (e) {
+    console.error("loadData error: " + e.message);
+    return { success: false, message: e.message };
   }
-  
-  const transactions = [];
-  if (transRaw.length > 1) {
-    for (let i = 1; i < transRaw.length; i++) {
-      try {
-        transactions.push({
-          id: String(transRaw[i][0]),
-          date: transRaw[i][1] instanceof Date ? Utilities.formatDate(transRaw[i][1], Session.getScriptTimeZone(), 'yyyy-MM-dd') : transRaw[i][1],
-          debits: JSON.parse(transRaw[i][2]),
-          credits: JSON.parse(transRaw[i][3]),
-          memo: transRaw[i][4]
-        });
-      } catch (e) { console.error("Data parse error", e); }
-    }
-  }
-
-  // Check and automatically carry over budgets
-  const budgets = ensureBudgets();
-
-  return { initialSetup, accounts, transactions, budgets };
 }
 
-
-function saveTransaction(tx) {
-  var lock = LockService.getScriptLock();
+/**
+ * 데이터 저장 (최적화 버전)
+ * - 날짜 계산을 루프 밖으로 빼서 1회만 실행
+ * - 헤더와 데이터를 합쳐서 단 1번의 setValues로 처리
+ * - 시트를 완전히 비우고 다시 써서 정합성 유지 및 속도 향상
+ */
+function saveData(items) {
   try {
-    lock.waitLock(10000);
-    const sheet = getSheet('Transactions');
-    const data = sheet.getDataRange().getValues();
+    const ss = SpreadsheetApp.getActiveSpreadsheet();
+    const tz = ss.getSpreadsheetTimeZone();
+    const sheet = getSheet();
     
-    let rowIndex = -1;
-    for (let i = 1; i < data.length; i++) {
-      if (String(data[i][0]) === String(tx.id)) {
-        rowIndex = i + 1;
-        break;
-      }
+    // 1. 저장 시점의 시간은 딱 한 번만 계산 (성능 향상 핵심)
+    const nowStr = Utilities.formatDate(new Date(), tz, "yyyy-MM-dd HH:mm:ss");
+    
+    // 2. 헤더 정의
+    const headers = ['id', 'title', 'date', 'time', 'location', 'description', 'type', 'importance', 'status', 'updatedAt', 'endDate', 'category'];
+    
+    // 3. 헤더를 포함한 전체 데이터를 2차원 배열 하나로 준비
+    let dataToWrite = [headers];
+
+    if (items && items.length > 0) {
+      const bodyRows = items.map(item => [
+        item.id || "", 
+        item.title || "", 
+        item.date || "", 
+        item.time || "", 
+        item.location || "", 
+        item.description || "", 
+        item.type || "Schedule", 
+        item.importance || "None", 
+        item.status || "", 
+        nowStr, // 미리 계산해둔 시간 값 사용
+        item.endDate || "",
+        item.category || "None"
+      ]);
+      // 헤더 배열 뒤에 데이터 배열 연결
+      dataToWrite = dataToWrite.concat(bodyRows);
     }
     
-    const rowData = [
-      tx.id,
-      tx.date,
-      JSON.stringify(tx.debits),
-      JSON.stringify(tx.credits),
-      tx.memo
-    ];
+    // 4. 시트 전체 초기화 (데이터 꼬임 방지 및 속도 최적화)
+    sheet.clear(); 
     
-    if (rowIndex > -1) {
-      sheet.getRange(rowIndex, 1, 1, 5).setValues([rowData]);
-    } else {
-      sheet.appendRow(rowData);
-    }
-    return true;
+    // 5. 단 한 번의 통신으로 모든 데이터(헤더+본문) 쓰기
+    sheet.getRange(1, 1, dataToWrite.length, headers.length).setValues(dataToWrite);
+    
+    // 6. 편의성을 위해 첫 행(헤더) 고정
+    sheet.setFrozenRows(1);
+
+    return { success: true };
   } catch (e) {
-    return false;
-  } finally {
-    lock.releaseLock();
+    console.error("saveData error: " + e.message);
+    return { success: false, message: e.message };
   }
 }
 
-function deleteTransaction(id) {
-  var lock = LockService.getScriptLock();
-  try {
-    lock.waitLock(10000);
-    const sheet = getSheet('Transactions');
-    const data = sheet.getDataRange().getValues();
-    for (let i = 1; i < data.length; i++) {
-      if (String(data[i][0]) === String(id)) {
-        sheet.deleteRow(i + 1);
-        return true;
-      }
-    }
-    return false;
-  } catch (e) {
-    return false;
-  } finally {
-    lock.releaseLock();
-  }
-}
-
-function saveSettings(settingsData) {
-  var lock = LockService.getScriptLock();
-  try {
-    lock.waitLock(10000);
-    const sheet = getSheet('Settings');
-    sheet.clear();
-    const data = [
-      ['key', 'value'],
-      ['initialSetup', JSON.stringify(settingsData.initialSetup)],
-      ['accounts', JSON.stringify(settingsData.accounts)]
-    ];
-    sheet.getRange(1, 1, data.length, data[0].length).setValues(data);
-    return true;
-  } catch (e) {
-    return false;
-  } finally {
-    lock.releaseLock();
-  }
-}
-
-function saveBudget(month, budgetData) {
-  var lock = LockService.getScriptLock();
-  try {
-    lock.waitLock(10000);
-    const sheet = getSheet('Budgets');
-    const data = sheet.getDataRange().getValues();
-    let rowIndex = -1;
-    for (let i = 1; i < data.length; i++) {
-      if (String(data[i][0]) === String(month)) {
-        rowIndex = i + 1;
-        break;
-      }
-    }
-    const rowData = [month, JSON.stringify(budgetData)];
-    if (rowIndex > -1) {
-      sheet.getRange(rowIndex, 1, 1, 2).setValues([rowData]);
-    } else {
-      sheet.appendRow(rowData);
-    }
-    return true;
-  } catch (e) {
-    return false;
-  } finally {
-    lock.releaseLock();
-  }
-}
-
-function ensureBudgets() {
-  const sheet = getSheet('Budgets');
-  const rawData = sheet.getDataRange().getValues();
-  const budgets = {};
-  
-  if (rawData.length > 1) {
-    for (let i = 1; i < rawData.length; i++) {
-      try {
-        budgets[rawData[i][0]] = JSON.parse(rawData[i][1]);
-      } catch (e) {
-        console.error("Budget parse error", e);
-      }
-    }
-  }
-  
-  const now = new Date();
-  const currentMonthStr = Utilities.formatDate(now, Session.getScriptTimeZone(), 'yyyy-MM');
-  
-  if (!budgets[currentMonthStr]) {
-    const keys = Object.keys(budgets).sort();
-    let latestBudget = {};
-    if (keys.length > 0) {
-      latestBudget = budgets[keys[keys.length - 1]];
-    }
-    saveBudget(currentMonthStr, latestBudget);
-    budgets[currentMonthStr] = latestBudget;
-  }
-  
-  return budgets;
-}
-
+/**
+ * 연결 확인용 핑 테스트
+ */
 function ping() {
-  return "pong";
+  return { success: true, message: "pong" };
 }
