@@ -33,6 +33,20 @@
     }
     .toast-up { animation: toastUp 0.4s ease-out forwards; }
     @keyframes toastUp { from { transform: translateY(100px); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
+    @keyframes slideNext {
+      0% { transform: translateX(45px); opacity: 0; }
+      100% { transform: translateX(0); opacity: 1; }
+    }
+    @keyframes slidePrev {
+      0% { transform: translateX(-45px); opacity: 0; }
+      100% { transform: translateX(0); opacity: 1; }
+    }
+    .animate-slide-next {
+      animation: slideNext 0.25s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+    }
+    .animate-slide-prev {
+      animation: slidePrev 0.25s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+    }
   </style>
 </head>
 <body class="bg-slate-50 text-slate-900 overflow-hidden">
@@ -171,6 +185,27 @@
 
     // --- 개별 뷰 컴포넌트 ---
     const MonthlyView = ({ items, currentDate, setCurrentDate, setView, openEditor, todayStr, viewingDate, setViewingDate }) => {
+      const [slideDirection, setSlideDirection] = useState('');
+      const [prevDate, setPrevDate] = useState(currentDate);
+      const [showMobileAgenda, setShowMobileAgenda] = useState(false);
+
+      if (currentDate.getTime() !== prevDate.getTime()) {
+        const prevVal = prevDate.getFullYear() * 12 + prevDate.getMonth();
+        const newVal = currentDate.getFullYear() * 12 + currentDate.getMonth();
+        setPrevDate(currentDate);
+        if (newVal > prevVal) {
+          setSlideDirection('next');
+        } else if (newVal < prevVal) {
+          setSlideDirection('prev');
+        } else {
+          setSlideDirection('');
+        }
+
+        // 월이 변경되었을 때는 아젠다 카드를 닫은 상태(기본값)로 유지하고, viewingDate를 null로 리셋합니다.
+        setShowMobileAgenda(false);
+        setViewingDate(null);
+      }
+
       const year = currentDate.getFullYear();
       const month = currentDate.getMonth();
       const days = [];
@@ -179,6 +214,7 @@
       for (let i = 0; i < startDay; i++) days.push(null);
       for (let i = 1; i <= totalDaysCount; i++) days.push(i);
       const daysOfWeek = ['SUN', 'MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT'];
+      const rowCount = Math.ceil(days.length / 7);
 
       const getEventDuration = (s) => {
         if (!s.endDate || s.endDate <= s.date) return 1;
@@ -258,10 +294,16 @@
             </div>
           </div>
           <div 
+            key=${`${year}-${month}`}
             onTouchStart=${handleTouchStart}
             onTouchMove=${handleTouchMove}
             onTouchEnd=${handleTouchEnd}
-            className="grid grid-cols-7 border-t border-l border-slate-200 shadow-sm rounded-lg overflow-hidden text-[10px] md:text-xs select-none"
+            className=${`grid grid-cols-7 border-t border-l border-slate-200 shadow-sm rounded-lg overflow-hidden text-[10px] md:text-xs select-none transition-all duration-300 flex-1 ${
+              slideDirection === 'next' ? 'animate-slide-next' : slideDirection === 'prev' ? 'animate-slide-prev' : ''
+            }`}
+            style=${{
+              gridTemplateRows: `auto repeat(${rowCount}, 1fr)`
+            }}
           >
             ${daysOfWeek.map((day, i) => html`
               <div key=${day} className=${`p-2 text-center font-bold border-r border-b ${i === 0 ? 'bg-red-50 text-red-500' : i === 6 ? 'bg-blue-50 text-blue-500' : 'bg-slate-50 text-slate-400'}`}>${day}</div>
@@ -284,10 +326,16 @@
               return html`
                 <div 
                   key=${idx} 
-                  className=${`calendar-grid-cell p-1 border-r border-b transition-colors ${day && hasSchedules ? 'cursor-pointer' : ''} ${isToday ? 'bg-blue-50/50' : 'bg-white'}`}
+                  className=${`calendar-grid-cell p-1 border-r border-b transition-colors ${day ? 'cursor-pointer' : ''} ${isToday ? 'bg-blue-50/50' : 'bg-white'}`}
                   onClick=${() => {
-                    if (day && hasSchedules) {
-                      setViewingDate(dateStr);
+                    if (day) {
+                      const isAlreadySelected = (viewingDate === dateStr) || (viewingDate === null && dateStr === todayStr);
+                      if (isAlreadySelected) {
+                        setShowMobileAgenda(!showMobileAgenda);
+                      } else {
+                        setViewingDate(dateStr);
+                        setShowMobileAgenda(true);
+                      }
                     }
                   }}
                   onDoubleClick=${(e) => {
@@ -315,6 +363,7 @@
                               onClick=${(e) => { 
                                 e.stopPropagation(); 
                                 setViewingDate(dateStr); 
+                                setShowMobileAgenda(true);
                               }} 
                               className=${`schedule-item-monthly text-[8px] md:text-[10px] py-0.5 px-1.5 leading-tight whitespace-nowrap overflow-hidden text-ellipsis font-medium shadow-sm cursor-pointer ${getMonthlyItemClass(s.category, isMulti, isStart, isEnd)}`}
                               style=${{
@@ -350,7 +399,11 @@
           </div>
 
           <!-- 모바일 전용 아젠다 리스트 (데스크탑에선 숨김) -->
-          <div className="md:hidden mt-4 pt-4 border-t border-slate-200 flex-1 flex flex-col overflow-hidden">
+          <div className=${`md:hidden flex flex-col overflow-hidden transition-all duration-300 ease-in-out flex-none ${
+            showMobileAgenda 
+              ? 'mt-4 pt-4 border-t border-slate-200 opacity-100 max-h-[280px]' 
+              : 'mt-0 pt-0 border-t-0 border-transparent opacity-0 max-h-0 pointer-events-none'
+          }`}>
             <div className="flex justify-between items-center mb-3 px-1 shrink-0">
               <div>
                 <h3 className="text-sm font-black text-slate-800">${activeDate} 일정</h3>
